@@ -10,6 +10,7 @@ Usage:
     python main.py --dev    # Development — loads Vite dev server (hot reload)
 """
 
+import ctypes
 import logging
 import os
 import shutil
@@ -39,6 +40,62 @@ _ORIGIN_FILE = os.path.join(
     "CrocTransfer",
     "origin.txt",
 )
+
+# ── Single-Instance Guard (Windows named mutex via ctypes) ──
+
+_MUTEX_NAME = "CrocTransfer_SingleInstance_D0E858DF"
+_mutex_handle = None
+
+
+def _acquire_single_instance() -> bool:
+    """Try to acquire a system-wide named mutex.
+
+    Returns True if this is the only instance.
+    Returns False if another instance already holds the mutex.
+    On non-Windows, always returns True (no mutex support needed).
+    """
+    global _mutex_handle
+    if sys.platform != "win32":
+        return True
+
+    kernel32 = ctypes.windll.kernel32
+    _mutex_handle = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+    error = kernel32.GetLastError()
+    ERROR_ALREADY_EXISTS = 183
+
+    if error == ERROR_ALREADY_EXISTS:
+        # Another instance is running — bring it to front if possible
+        kernel32.CloseHandle(_mutex_handle)
+        _mutex_handle = None
+        return False
+
+    return True
+
+
+def _release_single_instance() -> None:
+    """Release the named mutex on exit."""
+    global _mutex_handle
+    if _mutex_handle and sys.platform == "win32":
+        ctypes.windll.kernel32.CloseHandle(_mutex_handle)
+        _mutex_handle = None
+
+
+def _focus_existing_window() -> None:
+    """Try to bring the existing CrocTransfer window to front."""
+    if sys.platform != "win32":
+        return
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, "Croc Transfer")
+        if hwnd:
+            SW_RESTORE = 9
+            user32.ShowWindow(hwnd, SW_RESTORE)
+            user32.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
+
+
+# ── Self-install / update helpers ──
 
 
 def _is_temp_path(path: str) -> bool:
@@ -95,6 +152,16 @@ def _self_install() -> bool:
 def main():
     if _self_install():
         sys.exit(0)
+
+    # Single-instance check — exit if another CrocTransfer is running
+    if not _acquire_single_instance():
+        logger.info("Another instance is already running, focusing it")
+        _focus_existing_window()
+        sys.exit(0)
+
+    import atexit
+
+    atexit.register(_release_single_instance)
 
     dev_mode = "--dev" in sys.argv
     api = CrocAPI()
