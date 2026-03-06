@@ -146,8 +146,7 @@ class AppState {
   // Files
   files = $state<SelectedFile[]>([]);
 
-  // Inline text (always enabled — section is collapsible, not toggled)
-  sendTextEnabled = $state(true);
+  // Inline text
   sendTextContent = $state("");
 
   // Transfer state
@@ -188,10 +187,10 @@ class AppState {
     const contact = this.activeContact;
     if (!contact) return this.sendOptions;
     const opts = { ...this.sendOptions };
-    if (contact.options?.relay) opts.relay = contact.options.relay;
-    if (contact.options?.curve) opts.curve = contact.options.curve;
-    if (contact.options?.local) opts.local = contact.options.local;
-    if (contact.options?.noCompress) opts.noCompress = contact.options.noCompress;
+    if (contact.options?.relay != null) opts.relay = contact.options.relay;
+    if (contact.options?.curve != null) opts.curve = contact.options.curve;
+    if (contact.options?.local != null) opts.local = contact.options.local;
+    if (contact.options?.noCompress != null) opts.noCompress = contact.options.noCompress;
     opts.code = contact.code;
     return opts;
   }
@@ -199,10 +198,10 @@ class AppState {
   get effectiveReceiveOptions(): ReceiveOptions {
     const contact = this.activeContact;
     const opts = { ...this.receiveOptions };
-    if (contact?.options?.outFolder) opts.outFolder = contact.options.outFolder;
-    if (contact?.options?.noCompress) opts.noCompress = contact.options.noCompress;
-    if (contact?.options?.local) opts.local = contact.options.local;
-    if (contact?.options?.relay) opts.relay = contact.options.relay;
+    if (contact?.options?.outFolder != null) opts.outFolder = contact.options.outFolder;
+    if (contact?.options?.noCompress != null) opts.noCompress = contact.options.noCompress;
+    if (contact?.options?.local != null) opts.local = contact.options.local;
+    if (contact?.options?.relay != null) opts.relay = contact.options.relay;
     return opts;
   }
 
@@ -328,12 +327,6 @@ class AppState {
     this.resetTransfer();
     this._transferResolve?.(success);
     this._transferResolve = null;
-  }
-
-  waitForTransferDone(): Promise<boolean> {
-    return new Promise(resolve => {
-      this._transferResolve = resolve;
-    });
   }
 
   // ── Persisted options ──

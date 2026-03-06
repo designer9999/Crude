@@ -35,7 +35,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from typing import IO
+from typing import BinaryIO
 
 logger = logging.getLogger(__name__)
 
@@ -123,26 +123,30 @@ def _send_msg(sock: socket.socket, data: dict) -> None:
 
 def _recv_msg(sock: socket.socket) -> dict | None:
     """Receive a length-prefixed JSON message. Returns None on disconnect."""
-    header = b""
-    while len(header) < 4:
-        chunk = sock.recv(4 - len(header))
+    header = bytearray(4)
+    pos = 0
+    while pos < 4:
+        chunk = sock.recv(4 - pos)
         if not chunk:
             return None
-        header += chunk
+        header[pos : pos + len(chunk)] = chunk
+        pos += len(chunk)
     (length,) = struct.unpack(HEADER_FMT, header)
     if length > 100 * 1024 * 1024:
         return None
-    payload = b""
-    while len(payload) < length:
-        chunk = sock.recv(min(length - len(payload), CHUNK_SIZE))
+    buf = bytearray(length)
+    pos = 0
+    while pos < length:
+        chunk = sock.recv(min(length - pos, CHUNK_SIZE))
         if not chunk:
             return None
-        payload += chunk
-    return json.loads(payload)
+        buf[pos : pos + len(chunk)] = chunk
+        pos += len(chunk)
+    return json.loads(buf)
 
 
 def _recv_exact(
-    sock: socket.socket, n: int, out_file: IO[bytes] | None = None
+    sock: socket.socket, n: int, out_file: BinaryIO | None = None
 ) -> bytes | None:
     """Receive exactly n bytes. If out_file is given, write directly to it."""
     if out_file:
@@ -154,13 +158,15 @@ def _recv_exact(
             out_file.write(chunk)
             received += len(chunk)
         return b""
-    data = b""
-    while len(data) < n:
-        chunk = sock.recv(min(n - len(data), CHUNK_SIZE))
+    buf = bytearray(n)
+    pos = 0
+    while pos < n:
+        chunk = sock.recv(min(n - pos, CHUNK_SIZE))
         if not chunk:
             return None
-        data += chunk
-    return data
+        buf[pos : pos + len(chunk)] = chunk
+        pos += len(chunk)
+    return bytes(buf)
 
 
 def _send_file_data(sock: socket.socket, path: str) -> None:
@@ -300,16 +306,17 @@ class LANPeer:
     def stop(self) -> None:
         """Stop everything."""
         self._running = False
-        self._connected = False
-        self._peer_ip = None
-
-        for s in (self._conn, self._server_sock, self._beacon_sock):
+        with self._conn_lock:
+            self._connected = False
+            self._peer_ip = None
+            conn = self._conn
+            self._conn = None
+        for s in (conn, self._server_sock, self._beacon_sock):
             if s:
                 try:
                     s.close()
                 except Exception:
                     pass
-        self._conn = None
         self._server_sock = None
         self._beacon_sock = None
 
@@ -321,7 +328,6 @@ class LANPeer:
                     return False
                 conn = self._conn
             try:
-                conn.fileno()
                 _send_msg(conn, {"type": "text", "text": text})
                 return True
             except Exception as e:
@@ -371,12 +377,6 @@ class LANPeer:
                 conn = self._conn
 
             try:
-                conn.fileno()
-            except OSError:
-                logger.error("LAN send: socket no longer valid")
-                return False
-
-            try:
                 logger.info(
                     "LAN send: %d files, %d dirs", len(file_list), len(dir_list)
                 )
@@ -405,23 +405,24 @@ class LANPeer:
 
     def _beacon_loop(self) -> None:
         """Broadcast our presence and listen for peers."""
-        try:
-            self._beacon_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._beacon_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            self._beacon_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self._beacon_sock.settimeout(BEACON_INTERVAL)
-            self._beacon_sock.bind(("", BEACON_PORT))
-        except OSError as e:
-            logger.error("Beacon bind failed: %s", e)
+        for port in (BEACON_PORT, BEACON_PORT + 1):
             try:
-                self._beacon_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self._beacon_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                self._beacon_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                self._beacon_sock.settimeout(BEACON_INTERVAL)
-                self._beacon_sock.bind(("", BEACON_PORT + 1))
-            except OSError:
-                logger.error("Beacon totally failed")
-                return
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.settimeout(BEACON_INTERVAL)
+                sock.bind(("", port))
+                self._beacon_sock = sock
+                break
+            except OSError as e:
+                logger.error("Beacon bind port %d failed: %s", port, e)
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        else:
+            logger.error("Beacon totally failed")
+            return
 
         beacon_data = BEACON_MAGIC + self._code_hash.encode("ascii")
         my_ips = set(_get_all_ips())
@@ -448,7 +449,7 @@ class LANPeer:
 
                 try:
                     data, addr = self._beacon_sock.recvfrom(256)
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except OSError:
                     if not self._running:
@@ -498,7 +499,7 @@ class LANPeer:
         while self._running:
             try:
                 conn, addr = self._server_sock.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 if not self._running:
@@ -530,6 +531,7 @@ class LANPeer:
             return
         if time.monotonic() - self._connect_time < 3.0:
             return
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(CONNECT_TIMEOUT)
@@ -540,10 +542,17 @@ class LANPeer:
             if msg and msg.get("type") == "auth_ok":
                 sock.settimeout(None)
                 self._establish_connection(sock, peer_ip)
+                sock = None  # ownership transferred
             else:
                 sock.close()
+                sock = None
         except Exception as e:
             self._on_log("warn", f"LAN direct: connection to {peer_ip} failed: {e}")
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
 
     def _establish_connection(
         self, conn: socket.socket, peer_ip: str, *, inbound: bool = False

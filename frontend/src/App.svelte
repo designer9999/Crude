@@ -127,7 +127,6 @@
             // Auto-clear sent files after successful send
             if (direction === "sent" && !isText) {
               app.clearFiles();
-              app.sendTextContent = "";
             }
           } else if (!data.stopped) {
             showSnackbar("Transfer failed");
@@ -252,10 +251,6 @@
     }
   });
 
-  async function handleStop() {
-    await stopTransfer();
-  }
-
   // Split send — files and text are separate actions
   const fabHasFiles = $derived(app.hasFiles);
   const fabHasText = $derived(!!app.sendTextContent.trim());
@@ -280,7 +275,6 @@
           });
         }
         app.clearFiles();
-        app.sendTextContent = "";
       }
       return;
     }
@@ -433,7 +427,7 @@
   {#if app.activeView === "transfer"}
     <div class="px-4 py-2 border-t border-outline-variant bg-surface">
       {#if app.transferActive}
-        <Button variant="error" full onclick={handleStop}>
+        <Button variant="error" full onclick={stopTransfer}>
           <Icon name="stop" size={18} />
           Stop Transfer
         </Button>

@@ -5,6 +5,7 @@ Exposed to the Svelte frontend via window.pywebview.api.
 Requires Python 3.14+.
 """
 
+import atexit
 import glob as _glob
 import json
 import logging
@@ -54,6 +55,7 @@ def _safe_close_process(proc: subprocess.Popen | None) -> None:
     except Exception:
         try:
             proc.kill()
+            proc.wait(timeout=3)
         except Exception:
             pass
 
@@ -69,12 +71,9 @@ class CrocAPI:
         self._window: webview.Window | None = None
         self._lock = threading.Lock()
         self._process: subprocess.Popen | None = None
-        self._transfer_active = False
         self._croc_path = self._find_croc()
         self._lan_peer: LANPeer | None = None
         self._lan_peer_lock = threading.Lock()
-
-        import atexit
 
         atexit.register(self._cleanup)
 
@@ -497,8 +496,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             return
 
         self._kill_existing_process()
-        with self._lock:
-            self._transfer_active = True
         names = [os.path.basename(p) for p in valid]
         self._js_event("transfer_start", {"mode": "send", "files": names})
         threading.Thread(
@@ -518,8 +515,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             self._js_log("error", "No text provided")
             return
         self._kill_existing_process()
-        with self._lock:
-            self._transfer_active = True
         self._js_event("transfer_start", {"mode": "send", "files": ["(text)"]})
         threading.Thread(
             target=self._run_send_text,
@@ -538,8 +533,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             return
 
         self._kill_existing_process()
-        with self._lock:
-            self._transfer_active = True
         self._js_event("transfer_start", {"mode": "receive", "code": code})
         threading.Thread(
             target=self._run_receive,
@@ -554,7 +547,7 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             if proc:
                 _safe_close_process(proc)
                 self._process = None
-                self._transfer_active = False
+
                 self._js_log("warn", "Transfer stopped")
                 self._js_event("transfer_done", {"success": False, "stopped": True})
                 return True
@@ -567,7 +560,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             if proc:
                 _safe_close_process(proc)
                 self._process = None
-                self._transfer_active = False
 
     # ── LAN Direct Transfer ──
 
@@ -710,6 +702,8 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
     def _run_send(self, paths: list[str], opts: dict) -> None:
         proc = None
         file_names = [os.path.basename(p) for p in paths]
+        success = False
+        error_msg = ""
         try:
             cmd = self._build_global_args(opts) + self._build_send_args(opts) + paths
             self._log_cmd(cmd)
@@ -742,31 +736,31 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
                 self._js_log("info", line)
             if last_sending_line:
                 self._js_log("info", last_sending_line)
-            proc.wait(timeout=3600)
+            proc.wait(timeout=10)
             success = proc.returncode == 0
-            self._js_event(
-                "transfer_done",
-                {
-                    "success": success,
-                    "files": file_names,
-                    "mode": "send",
-                },
-            )
         except subprocess.TimeoutExpired:
-            self._js_log("error", "Transfer timed out")
-            self._js_event("transfer_done", {"success": False})
+            error_msg = "Transfer timed out"
         except Exception as e:
             logger.error("Send error: %s", e)
-            self._js_log("error", str(e))
-            self._js_event("transfer_done", {"success": False})
+            error_msg = str(e)
         finally:
             _safe_close_process(proc)
             with self._lock:
+                stopped = self._process is None
                 self._process = None
-                self._transfer_active = False
+            if stopped:
+                return  # stop_transfer already handled events
+            if error_msg:
+                self._js_log("error", error_msg)
+            self._js_event(
+                "transfer_done",
+                {"success": success, "files": file_names, "mode": "send"},
+            )
 
     def _run_send_text(self, text: str, opts: dict) -> None:
         proc = None
+        success = False
+        error_msg = ""
         try:
             cmd = (
                 self._build_global_args(opts)
@@ -793,32 +787,32 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
                     code = line.split("Code is:")[-1].strip()
                     self._js_event("code_ready", {"code": code})
                 self._js_log("info", line)
-            proc.wait(timeout=3600)
+            proc.wait(timeout=10)
             success = proc.returncode == 0
-            self._js_event(
-                "transfer_done",
-                {
-                    "success": success,
-                    "files": ["(text)"],
-                    "mode": "send",
-                },
-            )
         except subprocess.TimeoutExpired:
-            self._js_log("error", "Transfer timed out")
-            self._js_event("transfer_done", {"success": False})
+            error_msg = "Transfer timed out"
         except Exception as e:
             logger.error("Send text error: %s", e)
-            self._js_log("error", str(e))
-            self._js_event("transfer_done", {"success": False})
+            error_msg = str(e)
         finally:
             _safe_close_process(proc)
             with self._lock:
+                stopped = self._process is None
                 self._process = None
-                self._transfer_active = False
+            if stopped:
+                return
+            if error_msg:
+                self._js_log("error", error_msg)
+            self._js_event(
+                "transfer_done",
+                {"success": success, "files": ["(text)"], "mode": "send"},
+            )
 
     def _run_receive(self, code: str, opts: dict) -> None:
         proc = None
         received_files: list[str] = []
+        success = False
+        error_msg = ""
         try:
             cmd = self._build_global_args(opts)
             if opts.get("outFolder"):
@@ -845,28 +839,26 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
                     if fname and fname not in received_files:
                         received_files.append(fname)
                 self._js_log("info", line)
-            proc.wait(timeout=3600)
+            proc.wait(timeout=10)
             success = proc.returncode == 0
-            self._js_event(
-                "transfer_done",
-                {
-                    "success": success,
-                    "files": received_files,
-                    "mode": "receive",
-                },
-            )
         except subprocess.TimeoutExpired:
-            self._js_log("error", "Transfer timed out")
-            self._js_event("transfer_done", {"success": False})
+            error_msg = "Transfer timed out"
         except Exception as e:
             logger.error("Receive error: %s", e)
-            self._js_log("error", str(e))
-            self._js_event("transfer_done", {"success": False})
+            error_msg = str(e)
         finally:
             _safe_close_process(proc)
             with self._lock:
+                stopped = self._process is None
                 self._process = None
-                self._transfer_active = False
+            if stopped:
+                return
+            if error_msg:
+                self._js_log("error", error_msg)
+            self._js_event(
+                "transfer_done",
+                {"success": success, "files": received_files, "mode": "receive"},
+            )
 
     # ── JS bridge helpers ──
 

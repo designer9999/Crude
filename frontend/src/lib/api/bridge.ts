@@ -136,12 +136,6 @@ export async function copyToClipboard(text: string): Promise<void> {
 
 // ── LAN Direct Transfer ──
 
-export interface LANStatus {
-  active: boolean;
-  connected: boolean;
-  peer_ip: string | null;
-}
-
 export async function startLAN(code: string, outFolder?: string): Promise<void> {
   await api()?.start_lan(code, outFolder ?? "");
 }
@@ -156,8 +150,4 @@ export async function lanSendText(text: string): Promise<boolean> {
 
 export async function lanSendFiles(paths: string[]): Promise<boolean> {
   return (await api()?.lan_send_files(paths)) ?? false;
-}
-
-export async function getLANStatus(): Promise<LANStatus> {
-  return (await api()?.lan_status()) ?? { active: false, connected: false, peer_ip: null };
 }
