@@ -532,7 +532,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
         if not text:
             self._js_log("error", "No text provided")
             return
-
         with self._lock:
             self._transfer_active = True
         self._js_event("transfer_start", {"mode": "send", "files": ["(text)"]})
@@ -756,7 +755,7 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
                 + self._build_send_args(opts)
                 + ["--text", text]
             )
-            logger.info("Running: croc send --text ...")
+            self._log_cmd(cmd)
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,

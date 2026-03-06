@@ -28,10 +28,15 @@ import logging
 import os
 import socket
 import struct
+import subprocess
+import sys
 import threading
 import time
 
 logger = logging.getLogger(__name__)
+
+# Avoid console windows popping up on Windows
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 BEACON_PORT = 29170
 TRANSFER_PORT = 29171
@@ -41,6 +46,69 @@ CHUNK_SIZE = 256 * 1024  # 256KB read chunks
 BEACON_INTERVAL = 2.0
 PING_INTERVAL = 10.0
 CONNECT_TIMEOUT = 5.0
+
+_FIREWALL_ADDED = False
+
+
+def _ensure_firewall_rules() -> None:
+    """Add Windows Firewall rules to allow LAN direct transfer (UDP + TCP).
+    Silently fails on non-Windows or if not admin.
+    """
+    global _FIREWALL_ADDED
+    if _FIREWALL_ADDED or sys.platform != "win32":
+        return
+    _FIREWALL_ADDED = True
+
+    exe = sys.executable if getattr(sys, "frozen", False) else None
+    if not exe:
+        return
+
+    for proto, port, name_suffix in [
+        ("UDP", BEACON_PORT, "Beacon"),
+        ("TCP", TRANSFER_PORT, "Transfer"),
+    ]:
+        rule_name = f"CrocTransfer LAN {name_suffix}"
+        try:
+            # Check if rule already exists
+            check = subprocess.run(
+                [
+                    "netsh",
+                    "advfirewall",
+                    "firewall",
+                    "show",
+                    "rule",
+                    f"name={rule_name}",
+                ],
+                capture_output=True,
+                text=True,
+                creationflags=_NO_WINDOW,
+                timeout=5,
+            )
+            if check.returncode == 0 and rule_name in check.stdout:
+                continue  # Rule exists
+
+            # Add rule for the exe
+            subprocess.run(
+                [
+                    "netsh",
+                    "advfirewall",
+                    "firewall",
+                    "add",
+                    "rule",
+                    f"name={rule_name}",
+                    "dir=in",
+                    "action=allow",
+                    f"protocol={proto}",
+                    f"localport={port}",
+                    f"program={exe}",
+                ],
+                capture_output=True,
+                creationflags=_NO_WINDOW,
+                timeout=5,
+            )
+            logger.info("Firewall rule added: %s", rule_name)
+        except Exception as e:
+            logger.debug("Firewall rule %s failed (non-admin?): %s", rule_name, e)
 
 
 def _hash_code(code: str) -> str:
@@ -159,6 +227,11 @@ class LANPeer:
         self._out_folder = out_folder
         self._connected = False
 
+        # Ensure Windows Firewall allows our ports
+        _ensure_firewall_rules()
+
+        my_ip = self._get_my_ip()
+
         # Start TCP server
         self._listen_thread = threading.Thread(target=self._tcp_listen, daemon=True)
         self._listen_thread.start()
@@ -168,7 +241,8 @@ class LANPeer:
         self._beacon_thread.start()
 
         self._on_log(
-            "info", f"LAN direct: listening (code hash {self._code_hash[:8]}...)"
+            "info",
+            f"LAN direct: searching for peer (my IP: {my_ip})",
         )
 
     def stop(self) -> None:
@@ -289,17 +363,24 @@ class LANPeer:
         my_ip = self._get_my_ip()
         last_broadcast = 0.0
 
+        # Build list of broadcast addresses (generic + subnet-specific)
+        broadcast_addrs = ["255.255.255.255"]
+        if my_ip and my_ip != "127.0.0.1":
+            # Add subnet broadcast (e.g., 192.168.1.255)
+            parts = my_ip.split(".")
+            if len(parts) == 4:
+                broadcast_addrs.append(f"{parts[0]}.{parts[1]}.{parts[2]}.255")
+
         while self._running:
             try:
-                # Broadcast our beacon
+                # Broadcast our beacon to all addresses
                 now = time.monotonic()
                 if now - last_broadcast >= BEACON_INTERVAL:
-                    try:
-                        self._beacon_sock.sendto(
-                            beacon_data, ("<broadcast>", BEACON_PORT)
-                        )
-                    except OSError:
-                        pass
+                    for bcast in broadcast_addrs:
+                        try:
+                            self._beacon_sock.sendto(beacon_data, (bcast, BEACON_PORT))
+                        except OSError:
+                            pass
                     last_broadcast = now
 
                 # Listen for peer beacons
@@ -326,8 +407,17 @@ class LANPeer:
 
                 # Check if this peer has the same code
                 if peer_hash == self._code_hash and not self._connected:
-                    logger.info("Discovered LAN peer at %s", peer_ip)
+                    self._on_log(
+                        "info", f"LAN direct: found peer at {peer_ip}, connecting..."
+                    )
                     self._try_connect(peer_ip)
+                elif peer_hash != self._code_hash:
+                    logger.debug(
+                        "Beacon from %s: hash mismatch (theirs=%s, ours=%s)",
+                        peer_ip,
+                        peer_hash[:8],
+                        self._code_hash[:8],
+                    )
 
             except Exception as e:
                 if self._running:
@@ -345,7 +435,9 @@ class LANPeer:
             self._server_sock.bind(("0.0.0.0", TRANSFER_PORT))
             self._server_sock.listen(1)
         except OSError as e:
-            logger.error("TCP listen failed on port %d: %s", TRANSFER_PORT, e)
+            self._on_log(
+                "error", f"LAN direct: TCP port {TRANSFER_PORT} unavailable: {e}"
+            )
             return
 
         while self._running:
@@ -397,7 +489,7 @@ class LANPeer:
             else:
                 sock.close()
         except Exception as e:
-            logger.debug("LAN connect to %s failed: %s", peer_ip, e)
+            self._on_log("warn", f"LAN direct: connection to {peer_ip} failed: {e}")
 
     def _establish_connection(self, conn: socket.socket, peer_ip: str) -> None:
         """Set up a connected peer — start receive thread."""
@@ -560,9 +652,24 @@ class LANPeer:
 
     @staticmethod
     def _get_my_ip() -> str:
+        # Try multiple methods to get the LAN IP
+        # Method 1: Connect to external address (requires internet)
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("8.8.8.8", 80))
-                return s.getsockname()[0]
+                ip = s.getsockname()[0]
+                if ip and ip != "0.0.0.0":
+                    return ip
         except Exception:
-            return "127.0.0.1"
+            pass
+        # Method 2: Get all IPs and pick a private one
+        try:
+            hostname = socket.gethostname()
+            addrs = socket.getaddrinfo(hostname, None, socket.AF_INET)
+            for addr in addrs:
+                ip = addr[4][0]
+                if ip.startswith(("192.168.", "10.", "172.")):
+                    return ip
+        except Exception:
+            pass
+        return "127.0.0.1"
