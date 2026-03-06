@@ -149,6 +149,20 @@ def _self_install() -> bool:
     return False
 
 
+def _kill_all_croc() -> None:
+    """Kill any remaining croc.exe processes on Windows."""
+    if sys.platform != "win32":
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "croc.exe"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
 def main():
     if _self_install():
         sys.exit(0)
@@ -190,6 +204,10 @@ def main():
         "CrocTransfer",
     )
     webview.start(debug=dev_mode, private_mode=False, storage_path=storage)
+
+    # Window closed — ensure all croc processes are killed
+    api._cleanup()
+    _kill_all_croc()
 
 
 if __name__ == "__main__":
