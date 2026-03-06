@@ -485,8 +485,16 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
         ext = os.path.splitext(name)[1].lower()
         return {"name": name, "size": _file_size_str(size), "type": ext or "file"}
 
+    def _is_lan_connected(self) -> bool:
+        """Check if LAN direct peer is connected."""
+        with self._lan_peer_lock:
+            return self._lan_peer is not None and self._lan_peer._connected
+
     def send_files(self, paths: list, options: dict | None = None) -> None:
         """Send one or more files/folders with optional croc flags."""
+        if self._is_lan_connected():
+            self._js_log("info", "LAN direct active — use LAN send instead")
+            return
         if not self._croc_path:
             self._js_log("error", "croc not found!")
             return
@@ -507,6 +515,9 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
 
     def send_text(self, text: str, options: dict | None = None) -> None:
         """Send text content via croc."""
+        if self._is_lan_connected():
+            self._js_log("info", "LAN direct active — use LAN send instead")
+            return
         if not self._croc_path:
             self._js_log("error", "croc not found!")
             return
@@ -524,6 +535,9 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
         ).start()
 
     def receive_file(self, code: str, options: dict | None = None) -> None:
+        if self._is_lan_connected():
+            self._js_log("info", "LAN direct active — files arrive automatically")
+            return
         if not self._croc_path:
             self._js_log("error", "croc not found!")
             return

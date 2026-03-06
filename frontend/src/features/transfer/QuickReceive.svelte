@@ -58,20 +58,21 @@
     </div>
   {/if}
 
-  <Button
-    full
-    variant="tonal"
-    onclick={handleReceive}
-    disabled={app.transferActive || (!hasContact && !manualCode.trim())}
-  >
-    <Icon name="download" size={18} />
-    {app.transferActive && app.transferMode === "receive" ? "Receiving..." : "Receive via croc"}
-  </Button>
-
-  {#if hasContact && app.lanConnected}
-    <div class="mt-2 text-xs text-on-surface-variant text-center">
-      Files sent from the other PC arrive automatically via LAN direct
+  {#if app.lanConnected}
+    <div class="flex items-center gap-2 py-2 text-sm text-primary">
+      <Icon name="bolt" size={18} />
+      Files arrive automatically — no action needed
     </div>
+  {:else}
+    <Button
+      full
+      variant="tonal"
+      onclick={handleReceive}
+      disabled={app.transferActive || (!hasContact && !manualCode.trim())}
+    >
+      <Icon name="download" size={18} />
+      {app.transferActive && app.transferMode === "receive" ? "Receiving..." : "Receive via croc"}
+    </Button>
   {/if}
 
   {#if app.receiveOptions.outFolder}
