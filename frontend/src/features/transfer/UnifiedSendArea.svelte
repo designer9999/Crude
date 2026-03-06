@@ -23,6 +23,7 @@
 
   let messagesEl: HTMLDivElement | undefined = $state();
   let msgOpen = $state(true);
+  let copiedMsgId = $state<string | null>(null);
 
   // Auto-scroll messages to bottom when new messages arrive
   $effect(() => {
@@ -36,8 +37,10 @@
     }
   });
 
-  async function handleCopy(text: string) {
+  async function handleCopy(msgId: string, text: string) {
     await copyToClipboard(text);
+    copiedMsgId = msgId;
+    setTimeout(() => { if (copiedMsgId === msgId) copiedMsgId = null; }, 1200);
     onsnackbar?.("Copied to clipboard");
   }
 
@@ -142,28 +145,30 @@
               class="flex flex-col gap-1 max-h-52 overflow-y-auto msg-scroll"
             >
               {#each msgs as msg (msg.id)}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
-                  class="group/msg flex items-start gap-0 rounded-lg msg-row
-                         {msg.direction === 'sent' ? 'msg-sent' : 'msg-received'}"
+                  class="msg-bubble rounded-lg msg-row cursor-pointer
+                         {msg.direction === 'sent' ? 'msg-sent' : 'msg-received'}
+                         {copiedMsgId === msg.id ? 'msg-copied' : ''}"
+                  onclick={() => handleCopy(msg.id, msg.text)}
+                  title="Click to copy"
                 >
-                  <div class="flex-1 min-w-0 px-3 py-2">
+                  <div class="px-3 py-2">
                     <div class="font-mono text-xs leading-relaxed whitespace-pre-wrap break-all select-text">
                       {msg.text}
                     </div>
-                    <div class="text-[10px] opacity-40 mt-0.5 text-right">
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    <div class="flex items-center gap-1 mt-0.5 justify-end">
+                      {#if copiedMsgId === msg.id}
+                        <span class="text-primary msg-check"><Icon name="check" size={10} /></span>
+                        <span class="text-[10px] text-primary font-medium">Copied</span>
+                      {:else}
+                        <span class="text-[10px] opacity-40">
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      {/if}
                     </div>
                   </div>
-                  <button
-                    class="shrink-0 w-7 h-7 inline-flex items-center justify-center rounded-full
-                           opacity-0 group-hover/msg:opacity-100 mt-1.5 mr-1
-                           cursor-pointer bg-transparent border-none text-inherit hover:bg-white/10"
-                    style="transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);"
-                    onclick={() => handleCopy(msg.text)}
-                    title="Copy message"
-                  >
-                    <Icon name="content_copy" size={14} />
-                  </button>
                 </div>
               {/each}
             </div>
@@ -235,6 +240,32 @@
     background-color: color-mix(in srgb, var(--md-sys-color-tertiary) 12%, transparent);
     color: var(--md-sys-color-on-surface);
     margin-right: 1.5rem;
+  }
+  .msg-bubble {
+    transition:
+      background-color var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects),
+      transform var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
+  }
+  .msg-bubble:hover {
+    filter: brightness(1.1);
+  }
+  .msg-bubble:active {
+    transform: scale(0.97);
+  }
+  .msg-copied {
+    animation: msg-flash 400ms ease-out;
+  }
+  @keyframes msg-flash {
+    0% { transform: scale(0.97); }
+    40% { transform: scale(1.02); filter: brightness(1.3); }
+    100% { transform: scale(1); filter: brightness(1); }
+  }
+  .msg-check {
+    animation: check-pop 300ms var(--md-spring-fast-spatial) both;
+  }
+  @keyframes check-pop {
+    from { transform: scale(0); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
   }
   .msg-row {
     animation: msg-in var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial) both;

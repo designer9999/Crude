@@ -614,13 +614,17 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
         with self._lan_peer_lock:
             peer = self._lan_peer
         if peer and peer.connected:
+            logger.info("LAN send_files: %d paths: %s", len(paths), paths)
             success = peer.send_files(paths)
             if success:
                 names = [os.path.basename(p) for p in paths]
+                self._js_log("success", f"LAN direct: sent {', '.join(names)}")
                 self._js_event(
                     "transfer_done",
                     {"success": True, "files": names, "mode": "send"},
                 )
+            else:
+                self._js_log("error", "LAN direct: file send failed")
             return success
         return False
 

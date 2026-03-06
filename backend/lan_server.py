@@ -309,8 +309,15 @@ class LANPeer:
                             file_list.append((full, rel))
                 elif os.path.isfile(path):
                     file_list.append((path, os.path.basename(path)))
+                else:
+                    logger.warning("LAN send: path not found: %s", path)
+
+            if not file_list:
+                logger.warning("LAN send: no files to send from paths: %s", paths)
+                return False
 
             total_count = len(file_list) + len(dir_list)
+            logger.info("LAN send: %d files, %d dirs", len(file_list), len(dir_list))
             _send_msg(conn, {"type": "batch", "count": total_count})
 
             # Send directory entries first
@@ -339,7 +346,8 @@ class LANPeer:
             return True
 
         except Exception as e:
-            logger.error("LAN send_files failed: %s", e)
+            logger.error("LAN send_files failed: %s (type: %s)", e, type(e).__name__)
+            self._on_log("error", f"LAN direct: file transfer error: {e}")
             self._handle_disconnect()
             return False
 
