@@ -22,6 +22,7 @@ export interface CrocStatus {
   version?: string;
   app_version?: string;
   error?: string;
+  local_ip?: string;
 }
 
 export interface UpdateInfo {
@@ -115,4 +116,28 @@ export async function downloadUpdate(url: string): Promise<void> {
 
 export async function launchUpdate(path: string): Promise<void> {
   await api()?.launch_update(path);
+}
+
+export async function installCroc(): Promise<void> {
+  await api()?.install_croc();
+}
+
+export async function openUrl(url: string): Promise<void> {
+  await api()?.open_url(url);
+}
+
+export async function openFolder(path: string): Promise<boolean> {
+  return (await api()?.open_folder(path)) ?? false;
+}
+
+export async function copyToClipboard(text: string): Promise<void> {
+  await api()?.copy_to_clipboard(text);
+}
+
+export async function startAutoReceive(code: string, options?: ReceiveOptions): Promise<void> {
+  await api()?.start_auto_receive(code, options ?? {});
+}
+
+export async function stopAutoReceive(): Promise<void> {
+  await api()?.stop_auto_receive();
 }

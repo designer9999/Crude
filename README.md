@@ -1,6 +1,19 @@
 # Croc Transfer
 
-Encrypted peer-to-peer file transfer. Svelte 5 + pywebview + M3 Expressive dark theme.
+Encrypted peer-to-peer file & text transfer dashboard. Built with Svelte 5, pywebview, Tailwind v4, and M3 Expressive dark theme.
+
+Save contacts with pre-agreed code phrases for one-click transfers — like AnyDesk, but for croc.
+
+## Features
+
+- Contact system with saved code phrases
+- File & folder transfer with drag-and-drop
+- Inline text messaging between peers
+- Auto-receive mode (always listening)
+- LAN relay support for fast local transfers
+- Activity log with clickable received items
+- Self-update from GitHub releases
+- Single-exe distribution via PyInstaller
 
 ## Quick Start
 
@@ -13,45 +26,26 @@ dev.bat                    # Development (Vite hot reload)
 
 ```
 Crude/
-  main.py                  # pywebview bootstrap (--dev flag for dev mode)
+  main.py                  # pywebview bootstrap
   backend/
-    __init__.py
-    croc_api.py            # Python API exposed to JS via window.pywebview.api
+    croc_api.py            # Python API exposed via window.pywebview.api
+    updater.py             # GitHub release checker + downloader
+    version.py             # APP_VERSION + GITHUB_REPO
   frontend/
-    index.html             # Entry point (zero-flicker theme restore)
     src/
-      main.ts              # Svelte mount + pywebview bridge wait
+      App.svelte           # Root layout (contact bar, FAB, status bar)
       app.css              # Tailwind v4 + M3 tokens + motion springs
-      App.svelte           # Root component (top bar, tabs, status bar)
       lib/
-        api/
-          bridge.ts        # Typed pywebview.api wrappers + dev mock fallbacks
-        theme/
-          m3-color.ts      # HCT seed color → 26+ M3 color roles
-          m3-tokens.ts     # Color tokens → CSS custom properties
-          apply-theme.ts   # Inject tokens to DOM + localStorage cache
-          theme-store.svelte.ts  # Reactive theme state ($derived tokens)
-        state/
-          app-state.svelte.ts    # Global app state (transfer, logs, files)
-        ui/
-          Button.svelte    # M3 Button (filled, tonal, outlined, error)
-          Card.svelte      # M3 Card (elevated, filled, outlined)
-          Icon.svelte      # Material Symbols Rounded wrapper
-          ProgressBar.svelte  # M3 Linear indeterminate
-          Snackbar.svelte  # M3 Snackbar (inverseSurface, auto-dismiss)
+        api/bridge.ts      # Typed pywebview.api wrappers
+        state/app-state.svelte.ts  # Global state + contacts + persistence
+        theme/             # M3 Expressive color system
+        ui/                # M3 components (Button, Card, Dialog, Switch, etc.)
       features/
-        send/
-          SendPage.svelte  # Send tab layout
-          DropZone.svelte  # Drag & drop + file picker
-          CodeDisplay.svelte  # Transfer code with copy button
-        receive/
-          ReceivePage.svelte  # Receive tab layout
-        guide/
-          GuidePage.svelte # How-to guide + colleague setup instructions
-        LogPanel.svelte    # Transfer log output
-  dist/                    # Built output (vite build)
-  package.json             # Svelte 5, Tailwind v4, M3 color utils
-  vite.config.ts           # Vite + Svelte + Tailwind + $lib alias
+        contacts/          # ContactBar, ContactChip, ContactDialog, ContactAvatar
+        transfer/          # TransferPage, UnifiedSendArea, QuickReceive, ActivityLog
+        send/              # DropZone, FileList, CodeDisplay (reused by transfer)
+        settings/          # SettingsPage (global defaults + about)
+        LogPanel.svelte    # Raw croc output log
 ```
 
 ## Requirements
@@ -74,7 +68,11 @@ npx vite build            # Builds to dist/
 Croc-Transfer.bat         # Runs from dist/
 ```
 
-## Colleague Setup
+## Build Exe
 
-They need croc: `winget install schollz.croc` then restart terminal.
-See the **Guide** tab in the app for full setup instructions.
+```bash
+npx vite build
+python -m PyInstaller --noconfirm --onefile --windowed --name CrocTransfer --icon=imageres.dll_14_147.ico --add-data dist;dist --add-data backend;backend main.py
+```
+
+Output: `dist/CrocTransfer.exe`

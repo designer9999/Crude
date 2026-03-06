@@ -49,16 +49,18 @@
         </div>
       </div>
 
-      <!-- Remove -->
-      <button
-        class="relative z-10 shrink-0 w-7 h-7 rounded-full flex items-center justify-center
-               text-on-surface-variant cursor-pointer opacity-0 group-hover:opacity-100
-               transition-opacity"
-        onclick={() => app.removeFile(file.path)}
-        title="Remove"
-      >
-        <Icon name="close" size={16} />
-      </button>
+      <!-- Remove (hidden during active transfer) -->
+      {#if !app.transferActive}
+        <button
+          class="relative z-10 shrink-0 w-7 h-7 rounded-full flex items-center justify-center
+                 text-on-surface-variant cursor-pointer opacity-0 group-hover:opacity-100
+                 transition-opacity"
+          onclick={() => app.removeFile(file.path)}
+          title="Remove"
+        >
+          <Icon name="close" size={16} />
+        </button>
+      {/if}
     </div>
   {/each}
 </div>

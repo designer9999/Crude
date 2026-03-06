@@ -1,6 +1,6 @@
 <!--
-  Root Application Component
-  Layout: Top bar + Tabs + Content + Status bar
+  Root Application Component — Dashboard layout
+  Contact bar + Transfer/Settings views + Status bar
   Theme applied on mount via M3 Expressive (SchemeExpressive)
 -->
 <script lang="ts">
@@ -8,14 +8,17 @@
   import { getThemeState } from "$lib/theme/theme-store.svelte";
   import { applyThemeToDOM } from "$lib/theme/apply-theme";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { getStatus, stopTransfer, checkUpdate, downloadUpdate, launchUpdate } from "$lib/api/bridge";
+  import { getStatus, stopTransfer, checkUpdate, downloadUpdate, launchUpdate, installCroc, startAutoReceive, stopAutoReceive, sendFiles, sendText } from "$lib/api/bridge";
   import Icon from "$lib/ui/Icon.svelte";
+  import IconButton from "$lib/ui/IconButton.svelte";
   import Button from "$lib/ui/Button.svelte";
-  import ProgressBar from "$lib/ui/ProgressBar.svelte";
+  // ProgressBar removed — transfer indicator is now a border animation on the send card
   import Snackbar from "$lib/ui/Snackbar.svelte";
-  import SendPage from "./features/send/SendPage.svelte";
-  import ReceivePage from "./features/receive/ReceivePage.svelte";
-  import GuidePage from "./features/guide/GuidePage.svelte";
+  import Divider from "$lib/ui/Divider.svelte";
+  import ContactBar from "./features/contacts/ContactBar.svelte";
+  import ContactDialog from "./features/contacts/ContactDialog.svelte";
+  import TransferPage from "./features/transfer/TransferPage.svelte";
+  import SettingsPage from "./features/settings/SettingsPage.svelte";
 
   const theme = getThemeState();
   const app = getAppState();
@@ -23,7 +26,7 @@
   let snackbarMsg = $state("");
   let snackbarVisible = $state(false);
 
-  let appVersion = $state("1.0.0");
+  let appVersion = $state("2.0.0");
   let updateAvailable = $state(false);
   let updateUrl = $state("");
   let updateVersion = $state("");
@@ -31,19 +34,54 @@
   let updateProgress = $state(0);
   let updateFilePath = $state("");
 
+  // Contact dialog state
+  let contactDialogOpen = $state(false);
+  let editingContact = $state<import("$lib/state/app-state.svelte").Contact | null>(null);
+
   function showSnackbar(msg: string) {
     snackbarMsg = msg;
     snackbarVisible = true;
+  }
+
+  function openAddContact() {
+    editingContact = null;
+    contactDialogOpen = true;
+  }
+
+  function openEditContact(id: string) {
+    editingContact = app.contacts.find(c => c.id === id) ?? null;
+    contactDialogOpen = true;
   }
 
   $effect(() => {
     applyThemeToDOM(theme.tokens);
   });
 
+  // Auto-receive: start/stop based on active contact's autoReceive setting
+  $effect(() => {
+    const contact = app.activeContact;
+    const shouldAutoRecv = !!contact?.autoReceive && app.crocOk;
+
+    if (shouldAutoRecv && contact) {
+      // Start auto-receive for this contact (if not already for this contact)
+      if (app.autoReceiveContactId !== contact.id) {
+        app.autoReceiveActive = true;
+        app.autoReceiveContactId = contact.id;
+        startAutoReceive(contact.code, app.effectiveReceiveOptions);
+      }
+    } else if (app.autoReceiveActive) {
+      // Stop auto-receive
+      app.autoReceiveActive = false;
+      app.autoReceiveContactId = null;
+      stopAutoReceive();
+    }
+  });
+
   onMount(async () => {
     const status = await getStatus();
     app.crocOk = status.ok;
     app.crocVersion = status.version?.replace("croc version ", "") ?? "not found";
+    app.localIp = status.local_ip ?? "unknown";
     if (status.app_version) appVersion = status.app_version;
 
     window.onLog = (level: string, msg: string) => {
@@ -61,18 +99,60 @@
 
         case "code_ready":
           app.transferCode = data.code;
-          showSnackbar("Share this code with the receiver");
           break;
 
-        case "transfer_done":
-          if (data.success) {
-            app.addLog("success", "Transfer completed successfully!");
-            showSnackbar("Transfer complete!");
+        case "transfer_done": {
+          const success = data.success;
+          const fileNames: string[] = data.files ?? [];
+          const direction = data.mode === "send" ? "sent" : "received";
+          const isText = fileNames.length === 1 && fileNames[0] === "(text)";
+
+          if (success) {
+            const summary = isText
+              ? (direction === "sent" ? "Text sent!" : "Text received!")
+              : fileNames.length > 0
+                ? `${direction === "sent" ? "Sent" : "Received"} ${fileNames.join(", ")}`
+                : "Transfer complete!";
+            app.addLog("success", summary);
+            // Only show snackbar for received items — sender doesn't need popups
+            if (direction === "received") {
+              showSnackbar(summary);
+            }
+
+            const contact = app.activeContact;
+            if (contact) {
+              app.addActivity({
+                contactId: contact.id,
+                direction,
+                type: isText ? "text" : "files",
+                items: isText ? [] : fileNames,
+                success: true,
+                outFolder: direction === "received" ? app.effectiveReceiveOptions.outFolder : undefined,
+              });
+            }
+
+            // Auto-clear sent files after successful send
+            if (direction === "sent" && !isText) {
+              app.clearFiles();
+              app.sendTextContent = "";
+              app.sendTextEnabled = false;
+            }
           } else if (!data.stopped) {
             showSnackbar("Transfer failed");
+            const contact = app.activeContact;
+            if (contact) {
+              app.addActivity({
+                contactId: contact.id,
+                direction,
+                type: isText ? "text" : "files",
+                items: fileNames,
+                success: false,
+              });
+            }
           }
-          app.resetTransfer();
+          app.resolveTransfer(success);
           break;
+        }
 
         case "update_progress":
           updateProgress = data.percent;
@@ -88,10 +168,87 @@
           updateDownloading = false;
           showSnackbar("Update download failed");
           break;
+
+        case "auto_receive_done":
+          if (data.success) {
+            const autoFiles: string[] = data.files ?? [];
+            const isAutoText = data.text != null;
+            const autoContact = app.autoReceiveContactId
+              ? app.contacts.find(c => c.id === app.autoReceiveContactId)
+              : null;
+
+            if (isAutoText) {
+              // Text received — add to messages and show in UI
+              const textContent = data.text as string;
+              if (autoContact) {
+                app.addMessage({
+                  contactId: autoContact.id,
+                  direction: "received",
+                  text: textContent,
+                });
+                app.addActivity({
+                  contactId: autoContact.id,
+                  direction: "received",
+                  type: "text",
+                  items: [],
+                  success: true,
+                });
+              }
+              showSnackbar("Text message received!");
+            } else {
+              const autoSummary = autoFiles.length > 0
+                ? `Received ${autoFiles.join(", ")}`
+                : "File received automatically!";
+              showSnackbar(autoSummary);
+              if (autoContact) {
+                app.addActivity({
+                  contactId: autoContact.id,
+                  direction: "received",
+                  type: "files",
+                  items: autoFiles,
+                  success: true,
+                  outFolder: app.effectiveReceiveOptions.outFolder,
+                });
+              }
+            }
+          }
+          break;
+
+        case "auto_receive_started":
+          app.autoReceiveActive = true;
+          break;
+
+        case "auto_receive_stopped":
+          app.autoReceiveActive = false;
+          app.autoReceiveContactId = null;
+          break;
+
+        case "install_croc_start":
+          app.crocInstalling = true;
+          break;
+
+        case "install_croc_done":
+          app.crocInstalling = false;
+          if (data.success) {
+            if (data.needs_restart) {
+              showSnackbar("croc installed! Restart the app.");
+            } else {
+              app.crocOk = true;
+              showSnackbar("croc installed successfully!");
+              getStatus().then(s => {
+                app.crocVersion = s.version?.replace("croc version ", "") ?? "installed";
+              });
+            }
+          } else if (data.no_winget) {
+            showSnackbar("winget not found — install croc manually");
+          } else {
+            showSnackbar("croc installation failed");
+          }
+          break;
       }
     };
 
-    // Check for updates silently on startup
+    // Check for updates silently
     try {
       const info = await checkUpdate();
       if (info.update_available && info.download_url) {
@@ -99,21 +256,49 @@
         updateUrl = info.download_url;
         updateVersion = info.latest_version ?? "";
       }
-    } catch { /* silent fail */ }
+    } catch (_e) { /* silent fail */ }
+
+    // Auto-select first contact if none selected
+    if (!app.activeContactId && app.contacts.length > 0) {
+      app.setActiveContact(app.contacts[0].id);
+    }
   });
-
-  const tabs = [
-    { id: "send" as const, icon: "upload", label: "Send" },
-    { id: "receive" as const, icon: "download", label: "Receive" },
-    { id: "guide" as const, icon: "menu_book", label: "Guide" },
-  ];
-
-  function switchTab(tab: "send" | "receive" | "guide") {
-    app.activeTab = tab;
-  }
 
   async function handleStop() {
     await stopTransfer();
+  }
+
+  // Split send — files and text are separate actions
+  const fabHasFiles = $derived(app.hasFiles);
+  const fabHasText = $derived(app.sendTextEnabled && !!app.sendTextContent.trim());
+  const fabShowSplit = $derived(fabHasFiles && fabHasText);
+
+  async function handleSendFiles() {
+    if (!app.hasFiles || app.transferActive) return;
+    const opts = app.effectiveSendOptions;
+    const contact = app.activeContact;
+    if (contact) app.touchContact(contact.id);
+    await sendFiles(app.filePaths, opts);
+  }
+
+  async function handleSendText() {
+    if (!app.sendTextEnabled || !app.sendTextContent.trim() || app.transferActive) return;
+    const opts = app.effectiveSendOptions;
+    const contact = app.activeContact;
+    if (contact) app.touchContact(contact.id);
+    const textToSend = app.sendTextContent.trim();
+    if (contact) app.addMessage({ contactId: contact.id, direction: "sent", text: textToSend });
+    app.sendTextContent = "";
+    await sendText(textToSend, opts);
+  }
+
+  async function handleSendAll() {
+    if (!app.canSend || app.transferActive) return;
+    if (app.hasFiles) {
+      await handleSendFiles();
+    } else if (fabHasText) {
+      await handleSendText();
+    }
   }
 
   async function handleDownloadUpdate() {
@@ -124,24 +309,28 @@
   }
 
   async function handleInstallUpdate() {
-    if (updateFilePath) {
-      await launchUpdate(updateFilePath);
-    }
+    if (updateFilePath) await launchUpdate(updateFilePath);
   }
 </script>
 
 <div class="flex flex-col h-screen bg-surface text-on-surface overflow-hidden select-none">
 
   <!-- Top App Bar -->
-  <div class="flex items-center gap-3 px-4 py-3 min-h-16">
+  <div class="flex items-center gap-3 px-4 py-2.5 min-h-14">
     <span class="text-primary"><Icon name="swap_horiz" size={28} /></span>
-    <h1 class="flex-1 text-[22px] font-normal text-on-surface" style="font-family: var(--font-brand);">Croc Transfer</h1>
+    <h1 class="flex-1 text-xl font-normal text-on-surface" style="font-family: var(--font-brand);">Croc Transfer</h1>
     <span
       class="text-[11px] font-medium px-2.5 py-1 rounded-full
              bg-surface-container-high text-on-surface-variant"
     >
       v{appVersion}
     </span>
+    <IconButton
+      title="Settings"
+      onclick={() => app.activeView = app.activeView === "settings" ? "transfer" : "settings"}
+    >
+      <Icon name={app.activeView === "settings" ? "close" : "settings"} size={24} />
+    </IconButton>
   </div>
 
   <!-- Update banner -->
@@ -153,9 +342,7 @@
         class="text-sm font-medium px-3 py-1 rounded-full bg-tertiary text-on-tertiary
                cursor-pointer border-none"
         onclick={handleDownloadUpdate}
-      >
-        Download
-      </button>
+      >Download</button>
     </div>
   {/if}
 
@@ -165,10 +352,7 @@
       <span class="flex-1">Downloading update... {updateProgress}%</span>
     </div>
     <div class="h-1 bg-surface-container-highest">
-      <div
-        class="h-full bg-tertiary"
-        style="width: {updateProgress}%; transition: width 200ms ease;"
-      ></div>
+      <div class="h-full bg-tertiary" style="width: {updateProgress}%; transition: width 200ms ease;"></div>
     </div>
   {/if}
 
@@ -180,58 +364,77 @@
         class="text-sm font-medium px-3 py-1 rounded-full bg-primary text-on-primary
                cursor-pointer border-none"
         onclick={handleInstallUpdate}
-      >
-        Install & restart
-      </button>
+      >Install & restart</button>
     </div>
   {/if}
 
-  <!-- Progress -->
-  <ProgressBar active={app.transferActive} />
-
-  <!-- Tab Bar -->
-  <div class="flex bg-surface-container border-b border-outline-variant">
-    {#each tabs as tab (tab.id)}
+  <!-- croc not found banner -->
+  {#if !app.crocOk && !app.crocInstalling}
+    <div class="flex items-center gap-2 px-4 py-2 bg-error-container text-on-error-container text-sm">
+      <Icon name="error" size={18} />
+      <span class="flex-1">croc not found</span>
       <button
-        class="tab-btn flex-1 flex items-center justify-center gap-2 py-3.5 px-4
-               border-none bg-transparent text-sm font-medium cursor-pointer relative
-               {app.activeTab === tab.id ? 'text-primary' : 'text-on-surface-variant'}"
-        style="transition: color var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);"
-        onclick={() => switchTab(tab.id)}
-      >
-        <div
-          class="absolute inset-0 bg-on-surface opacity-0 hover-layer"
-          style="transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);"
-        ></div>
-        <span class="relative z-10 inline-flex items-center gap-2">
-          <Icon name={tab.icon} size={20} />
-          {tab.label}
-        </span>
-        {#if app.activeTab === tab.id}
-          <span class="absolute bottom-0 left-1/2 -translate-x-1/2 w-[60%] h-[3px] bg-primary rounded-t-sm"></span>
-        {/if}
-      </button>
-    {/each}
-  </div>
+        class="text-sm font-medium px-3 py-1 rounded-full bg-error text-on-error
+               cursor-pointer border-none"
+        onclick={async () => await installCroc()}
+      >Install</button>
+    </div>
+  {/if}
+
+  {#if app.crocInstalling}
+    <div class="flex items-center gap-2 px-4 py-2 bg-tertiary-container text-on-tertiary-container text-sm">
+      <Icon name="hourglass_empty" size={18} />
+      <span class="flex-1">Installing croc...</span>
+    </div>
+  {/if}
+
+  <!-- Contact Bar (only in transfer view) -->
+  {#if app.activeView === "transfer"}
+    <ContactBar onadd={openAddContact} onedit={openEditContact} />
+    <Divider />
+  {/if}
 
   <!-- Content -->
   <div class="flex-1 overflow-y-auto p-4">
-    {#if app.activeTab === "send"}
-      <SendPage onsnackbar={showSnackbar} />
-    {:else if app.activeTab === "receive"}
-      <ReceivePage onsnackbar={showSnackbar} />
+    {#if app.activeView === "transfer"}
+      <TransferPage onsnackbar={showSnackbar} onaddcontact={openAddContact} />
     {:else}
-      <GuidePage />
+      <SettingsPage {appVersion} onsnackbar={showSnackbar} />
     {/if}
   </div>
 
-  <!-- Stop bar -->
-  {#if app.transferActive}
-    <div class="px-4 py-2">
-      <Button variant="error" full onclick={handleStop}>
-        <Icon name="stop" size={18} />
-        Stop Transfer
-      </Button>
+  <!-- FAB Send / Stop — always visible at bottom -->
+  {#if app.activeView === "transfer"}
+    <div class="px-4 py-2 border-t border-outline-variant bg-surface">
+      {#if app.transferActive}
+        <Button variant="error" full onclick={handleStop}>
+          <Icon name="stop" size={18} />
+          Stop Transfer
+        </Button>
+      {:else if fabShowSplit}
+        <!-- M3 Split Button: two separate rounded segments with gap -->
+        <div class="split-btn">
+          <button class="split-btn-leading" onclick={handleSendFiles}>
+            <div class="split-btn-state"></div>
+            <span class="split-btn-content">
+              <Icon name="upload_file" size={18} />
+              <span>Send files</span>
+            </span>
+          </button>
+          <button class="split-btn-trailing" onclick={handleSendText}>
+            <div class="split-btn-state"></div>
+            <span class="split-btn-content">
+              <Icon name="chat" size={18} />
+              <span>Send text</span>
+            </span>
+          </button>
+        </div>
+      {:else if app.canSend}
+        <Button full onclick={handleSendAll}>
+          <Icon name="send" size={18} />
+          {fabHasText ? "Send text" : "Send"}
+        </Button>
+      {/if}
     </div>
   {/if}
 
@@ -250,18 +453,106 @@
         ? app.transferMode === "send" ? "Sending..." : "Receiving..."
         : app.crocOk ? "Ready" : "croc not found"}
     </span>
+    {#if app.autoReceiveActive}
+      <span class="text-tertiary flex items-center gap-1">
+        <Icon name="hearing" size={12} />
+        auto-receive
+      </span>
+    {/if}
     <span class="flex-1"></span>
     <span>croc {app.crocVersion}</span>
   </div>
 </div>
 
+<!-- Contact Dialog -->
+<ContactDialog
+  bind:open={contactDialogOpen}
+  editContact={editingContact}
+  onclose={() => { contactDialogOpen = false; editingContact = null; }}
+/>
+
 <Snackbar message={snackbarMsg} bind:visible={snackbarVisible} />
 
 <style>
-  .tab-btn:hover .hover-layer {
+  /* M3 Split Button — two separate segments with gap */
+  .split-btn {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: 40px;
+    gap: 2px;
+  }
+
+  /* Shared segment styles */
+  .split-btn-leading,
+  .split-btn-trailing {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    border: none;
+    background: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+    cursor: pointer;
+    user-select: none;
+    outline: none;
+    overflow: hidden;
+    box-shadow: var(--shadow-level0);
+    transition: box-shadow var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
+  }
+  .split-btn-leading:hover,
+  .split-btn-trailing:hover {
+    box-shadow: var(--shadow-level1);
+  }
+
+  /* Leading segment — pill left, flat right */
+  .split-btn-leading {
+    flex: 1;
+    border-radius: 9999px 4px 4px 9999px;
+    padding: 0 20px 0 24px;
+  }
+
+  /* Trailing segment — flat left, pill right */
+  .split-btn-trailing {
+    flex: 1;
+    border-radius: 4px 9999px 9999px 4px;
+    padding: 0 24px 0 20px;
+  }
+
+  /* State layer — M3 spring animation */
+  .split-btn-state {
+    position: absolute;
+    inset: 0;
+    background: var(--md-sys-color-on-primary);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
+  }
+  .split-btn-leading:hover .split-btn-state,
+  .split-btn-trailing:hover .split-btn-state {
     opacity: 0.08;
   }
-  .tab-btn:active .hover-layer {
+  .split-btn-leading:focus-visible .split-btn-state,
+  .split-btn-trailing:focus-visible .split-btn-state {
     opacity: 0.1;
+  }
+  .split-btn-leading:active .split-btn-state,
+  .split-btn-trailing:active .split-btn-state {
+    opacity: 0.1;
+  }
+
+  /* Content — label + icon */
+  .split-btn-content {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.1px;
+    white-space: nowrap;
   }
 </style>

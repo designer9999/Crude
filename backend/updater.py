@@ -6,6 +6,7 @@ Checks for new releases, downloads .exe updates, launches installer.
 import json
 import logging
 import os
+import re
 import tempfile
 import urllib.request
 
@@ -26,6 +27,16 @@ def _parse_version(tag: str) -> tuple[int, ...]:
         except ValueError:
             break
     return tuple(parts) or (0,)
+
+
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a filename — strip path separators and traversal."""
+    # Take only the last component and remove anything suspicious
+    name = os.path.basename(name)
+    name = re.sub(r'[<>:"|?*]', "_", name)
+    if not name or name.startswith("."):
+        name = "CrocTransfer-update.exe"
+    return name
 
 
 def check_for_updates() -> dict:
@@ -94,11 +105,13 @@ def download_update(url: str, progress_callback=None) -> str | None:
     Returns:
         Full path to downloaded file, or None on failure.
     """
+    dest = None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Crude-Updater"})
         with urllib.request.urlopen(req, timeout=300) as resp:
             total = int(resp.headers.get("Content-Length", 0))
-            file_name = url.split("/")[-1]
+            raw_name = url.split("/")[-1]
+            file_name = _sanitize_filename(raw_name)
             if not file_name.endswith(".exe"):
                 file_name = "CrocTransfer-update.exe"
 
@@ -120,9 +133,22 @@ def download_update(url: str, progress_callback=None) -> str | None:
             if progress_callback:
                 progress_callback(100)
 
-            logger.info("Update downloaded to: %s", dest)
+            # Verify we got a reasonable file (at least 1MB for an exe)
+            actual_size = os.path.getsize(dest)
+            if actual_size < 1_000_000:
+                logger.error("Downloaded file too small: %d bytes", actual_size)
+                os.unlink(dest)
+                return None
+
+            logger.info("Update downloaded to: %s (%d bytes)", dest, actual_size)
             return dest
 
     except Exception as e:
-        logger.error("Download failed: %s", e)
-        return None
+        logger.error("Download failed: %s (type: %s)", e, type(e).__name__)
+        # Clean up partial download
+        if dest and os.path.isfile(dest):
+            try:
+                os.unlink(dest)
+            except OSError:
+                pass
+        raise  # Re-raise so caller can report the actual error

@@ -7,3 +7,5 @@ build/
 output/
 *.spec
 m3 Expressive/
+croc-marked-files.txt
+croc-stdin-*
