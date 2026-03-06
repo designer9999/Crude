@@ -326,7 +326,7 @@ class LANPeer:
                 return True
             except Exception as e:
                 logger.error("LAN send_text failed: %s", e)
-                self._handle_disconnect()
+                self._handle_disconnect(conn)
                 return False
 
     def send_files(self, paths: list[str]) -> bool:
@@ -393,7 +393,7 @@ class LANPeer:
             except Exception as e:
                 logger.error("LAN send_files failed: %s (%s)", e, type(e).__name__)
                 self._on_log("error", f"LAN direct: file transfer error: {e}")
-                self._handle_disconnect()
+                self._handle_disconnect(conn)
                 return False
 
     # ── UDP Beacon ──
@@ -583,13 +583,19 @@ class LANPeer:
 
         threading.Thread(target=self._ping_loop, name="lan-ping", daemon=True).start()
 
-    def _handle_disconnect(self) -> None:
-        """Handle peer disconnection."""
-        if self._send_lock.locked():
-            return
+    def _handle_disconnect(self, conn: socket.socket | None = None) -> None:
+        """Handle peer disconnection.
 
-        was_connected = self._connected
+        If *conn* is given, only disconnect when it is still the active
+        connection.  Stale recv-loops pass their own socket so they
+        never tear down a newer, valid connection.
+        """
         with self._conn_lock:
+            # Stale connection — ignore entirely
+            if conn is not None and self._conn is not conn:
+                return
+
+            was_connected = self._connected
             self._connected = False
             self._peer_ip = None
             old_conn = self._conn
@@ -609,6 +615,10 @@ class LANPeer:
 
     def _recv_loop(self, conn: socket.socket) -> None:
         """Handle incoming messages on the persistent connection."""
+        # Bail immediately if this connection is already superseded
+        with self._conn_lock:
+            if self._conn is not conn:
+                return
         while self._running and self._connected:
             try:
                 msg = _recv_msg(conn)
@@ -622,8 +632,8 @@ class LANPeer:
                         )
                     case "ping":
                         with self._conn_lock:
-                            if self._conn:
-                                _send_msg(self._conn, {"type": "pong"})
+                            if self._conn is conn:
+                                _send_msg(conn, {"type": "pong"})
                     case "pong":
                         pass
                     case "batch":
@@ -636,7 +646,7 @@ class LANPeer:
                     logger.error("LAN recv error: %s", e)
                 break
 
-        self._handle_disconnect()
+        self._handle_disconnect(conn)
 
     def _recv_file(self, conn: socket.socket, header: dict) -> None:
         """Receive a single file from the connection."""
@@ -693,8 +703,9 @@ class LANPeer:
             with self._conn_lock:
                 if not self._conn or not self._connected:
                     break
-                try:
-                    _send_msg(self._conn, {"type": "ping"})
-                except Exception:
-                    self._handle_disconnect()
-                    break
+                conn = self._conn
+            try:
+                _send_msg(conn, {"type": "ping"})
+            except Exception:
+                self._handle_disconnect(conn)
+                break
