@@ -5,6 +5,7 @@
 <script lang="ts">
   import Icon from "$lib/ui/Icon.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
+  import { pickFiles } from "$lib/api/bridge";
 
   interface Props {
     onadd?: (paths: string[]) => void;
@@ -14,6 +15,11 @@
 
   const app = getAppState();
   let dragOver = $state(false);
+
+  async function handleClick() {
+    const result = await pickFiles();
+    if (result && result.length > 0) onadd?.(result);
+  }
 
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
@@ -54,6 +60,7 @@
   class:drop-selected={!dragOver && app.hasFiles}
   class:drop-idle={!dragOver && !app.hasFiles}
   style="transition: all var(--md-spring-default-spatial-dur) var(--md-spring-default-spatial);"
+  onclick={handleClick}
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
