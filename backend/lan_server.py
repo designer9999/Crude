@@ -126,7 +126,7 @@ class LANPeer:
         self._code = code
         self._code_hash = _hash_code(code)
         self._on_event = on_event  # callback(event_name, data_dict)
-        self._on_log = on_log      # callback(level, msg)
+        self._on_log = on_log  # callback(level, msg)
         self._out_folder: str = ""
 
         # State
@@ -167,7 +167,9 @@ class LANPeer:
         self._beacon_thread = threading.Thread(target=self._beacon_loop, daemon=True)
         self._beacon_thread.start()
 
-        self._on_log("info", f"LAN direct: listening (code hash {self._code_hash[:8]}...)")
+        self._on_log(
+            "info", f"LAN direct: listening (code hash {self._code_hash[:8]}...)"
+        )
 
     def stop(self) -> None:
         """Stop everything."""
@@ -293,7 +295,9 @@ class LANPeer:
                 now = time.monotonic()
                 if now - last_broadcast >= BEACON_INTERVAL:
                     try:
-                        self._beacon_sock.sendto(beacon_data, ("<broadcast>", BEACON_PORT))
+                        self._beacon_sock.sendto(
+                            beacon_data, ("<broadcast>", BEACON_PORT)
+                        )
                     except OSError:
                         pass
                     last_broadcast = now
@@ -313,7 +317,7 @@ class LANPeer:
                 if not data.startswith(BEACON_MAGIC):
                     continue
 
-                peer_hash = data[len(BEACON_MAGIC):].decode("ascii", errors="ignore")
+                peer_hash = data[len(BEACON_MAGIC) :].decode("ascii", errors="ignore")
                 peer_ip = addr[0]
 
                 # Skip our own broadcasts
@@ -358,7 +362,11 @@ class LANPeer:
             try:
                 conn.settimeout(CONNECT_TIMEOUT)
                 msg = _recv_msg(conn)
-                if msg and msg.get("type") == "auth" and msg.get("hash") == self._code_hash:
+                if (
+                    msg
+                    and msg.get("type") == "auth"
+                    and msg.get("hash") == self._code_hash
+                ):
                     # Send auth response
                     _send_msg(conn, {"type": "auth_ok"})
                     conn.settimeout(None)
@@ -418,7 +426,9 @@ class LANPeer:
         self._on_log("success", f"LAN direct: connected to {peer_ip}")
 
         # Start receive thread
-        self._recv_thread = threading.Thread(target=self._recv_loop, args=(conn,), daemon=True)
+        self._recv_thread = threading.Thread(
+            target=self._recv_loop, args=(conn,), daemon=True
+        )
         self._recv_thread.start()
 
         # Start keepalive ping

@@ -12,7 +12,6 @@ export interface Contact {
   code: string;
   color: number;        // 0-7 index into CONTACT_COLORS
   lastUsedAt: string;
-  autoReceive?: boolean;  // auto-accept incoming transfers
   options?: {
     relay?: string;
     curve?: string;
@@ -159,9 +158,6 @@ class AppState {
   crocOk = $state(true);
   crocInstalling = $state(false);
 
-  // Auto-receive
-  autoReceiveActive = $state(false);
-  autoReceiveContactId = $state<string | null>(null);
 
   // Network info
   localIp = $state<string>("...");

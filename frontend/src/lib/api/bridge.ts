@@ -134,14 +134,6 @@ export async function copyToClipboard(text: string): Promise<void> {
   await api()?.copy_to_clipboard(text);
 }
 
-export async function startAutoReceive(code: string, options?: ReceiveOptions): Promise<void> {
-  await api()?.start_auto_receive(code, options ?? {});
-}
-
-export async function stopAutoReceive(): Promise<void> {
-  await api()?.stop_auto_receive();
-}
-
 // ── LAN Direct Transfer ──
 
 export interface LANStatus {

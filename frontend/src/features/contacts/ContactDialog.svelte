@@ -5,7 +5,6 @@
   import Dialog from "$lib/ui/Dialog.svelte";
   import TextField from "$lib/ui/TextField.svelte";
   import Button from "$lib/ui/Button.svelte";
-  import Switch from "$lib/ui/Switch.svelte";
   import Icon from "$lib/ui/Icon.svelte";
   import { getAppState, CONTACT_COLORS, type Contact } from "$lib/state/app-state.svelte";
 
@@ -22,8 +21,6 @@
   let name = $state("");
   let code = $state("");
   let color = $state(0);
-  let autoReceive = $state(false);
-  let relay = $state("");
   let showDelete = $state(false);
 
   // Reset form when dialog opens
@@ -33,14 +30,10 @@
         name = editContact.name;
         code = editContact.code;
         color = editContact.color;
-        autoReceive = editContact.autoReceive ?? false;
-        relay = editContact.options?.relay ?? "";
       } else {
         name = "";
         code = "";
         color = Math.floor(Math.random() * CONTACT_COLORS.length);
-        autoReceive = false;
-        relay = "";
       }
       showDelete = false;
     }
@@ -52,16 +45,11 @@
   function handleSave() {
     if (!isValid) return;
 
-    const contactOpts: Contact["options"] = {};
-    if (relay.trim()) contactOpts.relay = relay.trim();
-
     if (editContact) {
       app.updateContact(editContact.id, {
         name: name.trim(),
         code: code.trim(),
         color,
-        autoReceive,
-        options: { ...editContact.options, ...contactOpts },
       });
     } else {
       const contact: Contact = {
@@ -69,9 +57,7 @@
         name: name.trim(),
         code: code.trim(),
         color,
-        autoReceive,
         lastUsedAt: new Date().toISOString(),
-        options: Object.keys(contactOpts).length > 0 ? contactOpts : undefined,
       };
       app.addContact(contact);
       app.setActiveContact(contact.id);
@@ -119,20 +105,9 @@
     {:else}
       <div class="text-xs text-on-surface-variant">
         Both you and your colleague must use the same code phrase.
+        On the same network, transfers are instant via LAN direct.
       </div>
     {/if}
-
-    <TextField
-      label="Relay (for LAN auto-receive)"
-      placeholder="e.g. 192.168.1.50:9009"
-      mono
-      bind:value={relay}
-    />
-
-    <div class="text-xs text-on-surface-variant">
-      Set the other PC's IP:9009 here to enable instant LAN transfers.
-      Leave empty to use the public relay (one-shot only).
-    </div>
 
     <!-- Color picker -->
     <div>
@@ -151,15 +126,6 @@
           ></button>
         {/each}
       </div>
-    </div>
-
-    <!-- Auto-receive toggle -->
-    <div class="flex items-center justify-between pt-2 border-t border-outline-variant">
-      <div>
-        <div class="text-sm text-on-surface">Auto-receive</div>
-        <div class="text-xs text-on-surface-variant">Always listen for incoming files</div>
-      </div>
-      <Switch checked={autoReceive} onchange={(v) => autoReceive = v} />
     </div>
 
     <!-- Delete button (edit mode only) -->

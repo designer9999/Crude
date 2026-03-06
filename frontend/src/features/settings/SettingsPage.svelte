@@ -257,7 +257,7 @@
           <ol class="list-decimal list-inside flex flex-col gap-1">
             <li>Add a contact with a shared code phrase</li>
             <li>Pick files and click Send — the code is used automatically</li>
-            <li>On the other PC, click Receive (or enable auto-receive)</li>
+            <li>On the other PC, files arrive instantly via LAN direct</li>
             <li>Files transfer directly, end-to-end encrypted via croc</li>
           </ol>
         </div>

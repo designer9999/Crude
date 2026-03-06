@@ -1,6 +1,6 @@
 <!--
   Contact chip — avatar + name, selected state, click to activate
-  Shows a small listening indicator when auto-receive is active
+  Shows a small LAN indicator when peer is connected
 -->
 <script lang="ts">
   import type { Contact } from "$lib/state/app-state.svelte";
@@ -16,10 +16,6 @@
 
   let { contact, selected, onclick }: Props = $props();
   const app = getAppState();
-
-  const isListening = $derived(
-    app.autoReceiveActive && app.autoReceiveContactId === contact.id
-  );
 </script>
 
 <button
@@ -47,8 +43,8 @@
     <ContactAvatar name={contact.name} color={contact.color} size="sm" />
   </span>
   <span class="relative z-10 max-w-24 truncate">{contact.name}</span>
-  {#if isListening}
-    <span class="relative z-10 w-1.5 h-1.5 rounded-full bg-tertiary animate-pulse"></span>
+  {#if selected && app.lanConnected}
+    <span class="relative z-10 w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
   {:else if selected}
     <span class="relative z-10 text-on-secondary-container opacity-50"
           style="font-size: 14px; line-height: 1;">

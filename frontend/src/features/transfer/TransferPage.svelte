@@ -47,18 +47,18 @@
   {/if}
 
   {#if contact}
-    <!-- Contact header — compact, just name + auto-receive indicator -->
+    <!-- Contact header — compact, with LAN status -->
     <div class="flex items-center gap-3 px-1">
       <ContactAvatar name={contact.name} color={contact.color} size="lg" />
       <div class="flex-1 min-w-0">
         <div class="text-lg font-medium text-on-surface truncate">{contact.name}</div>
-        {#if app.autoReceiveActive && app.autoReceiveContactId === contact.id}
-          <div class="flex items-center gap-1 text-xs text-tertiary">
-            <Icon name="hearing" size={12} />
-            Listening for incoming files
+        {#if app.lanConnected}
+          <div class="flex items-center gap-1 text-xs text-primary">
+            <Icon name="bolt" size={12} />
+            LAN direct — {app.lanPeerIp}
           </div>
         {:else}
-          <div class="text-xs text-on-surface-variant">Ready to transfer</div>
+          <div class="text-xs text-on-surface-variant">Searching for peer on LAN...</div>
         {/if}
       </div>
     </div>

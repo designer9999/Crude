@@ -8,7 +8,7 @@
   import { getThemeState } from "$lib/theme/theme-store.svelte";
   import { applyThemeToDOM } from "$lib/theme/apply-theme";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { getStatus, stopTransfer, checkUpdate, downloadUpdate, launchUpdate, installCroc, startAutoReceive, stopAutoReceive, sendFiles, sendText, startLAN, stopLAN, lanSendText, lanSendFiles } from "$lib/api/bridge";
+  import { getStatus, stopTransfer, checkUpdate, downloadUpdate, launchUpdate, installCroc, sendFiles, sendText, startLAN, stopLAN, lanSendText, lanSendFiles } from "$lib/api/bridge";
   import Icon from "$lib/ui/Icon.svelte";
   import IconButton from "$lib/ui/IconButton.svelte";
   import Button from "$lib/ui/Button.svelte";
@@ -69,25 +69,6 @@
     }
   });
 
-  // Auto-receive: start/stop based on active contact's autoReceive setting
-  $effect(() => {
-    const contact = app.activeContact;
-    const shouldAutoRecv = !!contact?.autoReceive && app.crocOk;
-
-    if (shouldAutoRecv && contact) {
-      // Start auto-receive for this contact (if not already for this contact)
-      if (app.autoReceiveContactId !== contact.id) {
-        app.autoReceiveActive = true;
-        app.autoReceiveContactId = contact.id;
-        startAutoReceive(contact.code, app.effectiveReceiveOptions);
-      }
-    } else if (app.autoReceiveActive) {
-      // Stop auto-receive
-      app.autoReceiveActive = false;
-      app.autoReceiveContactId = null;
-      stopAutoReceive();
-    }
-  });
 
   onMount(async () => {
     const status = await getStatus();
@@ -178,60 +159,6 @@
         case "update_failed":
           updateDownloading = false;
           showSnackbar("Update download failed");
-          break;
-
-        case "auto_receive_done":
-          if (data.success) {
-            const autoFiles: string[] = data.files ?? [];
-            const isAutoText = data.text != null;
-            const autoContact = app.autoReceiveContactId
-              ? app.contacts.find(c => c.id === app.autoReceiveContactId)
-              : null;
-
-            if (isAutoText) {
-              // Text received — add to messages and show in UI
-              const textContent = data.text as string;
-              if (autoContact) {
-                app.addMessage({
-                  contactId: autoContact.id,
-                  direction: "received",
-                  text: textContent,
-                });
-                app.addActivity({
-                  contactId: autoContact.id,
-                  direction: "received",
-                  type: "text",
-                  items: [],
-                  success: true,
-                });
-              }
-              showSnackbar("Text message received!");
-            } else {
-              const autoSummary = autoFiles.length > 0
-                ? `Received ${autoFiles.join(", ")}`
-                : "File received automatically!";
-              showSnackbar(autoSummary);
-              if (autoContact) {
-                app.addActivity({
-                  contactId: autoContact.id,
-                  direction: "received",
-                  type: "files",
-                  items: autoFiles,
-                  success: true,
-                  outFolder: app.effectiveReceiveOptions.outFolder,
-                });
-              }
-            }
-          }
-          break;
-
-        case "auto_receive_started":
-          app.autoReceiveActive = true;
-          break;
-
-        case "auto_receive_stopped":
-          app.autoReceiveActive = false;
-          app.autoReceiveContactId = null;
           break;
 
         case "lan_connected":
@@ -558,12 +485,6 @@
       <span class="text-primary flex items-center gap-1">
         <Icon name="bolt" size={12} />
         LAN direct
-      </span>
-    {/if}
-    {#if app.autoReceiveActive}
-      <span class="text-tertiary flex items-center gap-1">
-        <Icon name="hearing" size={12} />
-        auto-receive
       </span>
     {/if}
     <span class="flex-1"></span>

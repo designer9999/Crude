@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import webbrowser
 
 import webview
@@ -72,78 +71,12 @@ class CrocAPI:
         self._process: subprocess.Popen | None = None
         self._transfer_active = False
         self._croc_path = self._find_croc()
-        # Auto-receive background listener
-        self._auto_lock = threading.Lock()  # Protects auto-receive state
-        self._auto_recv_process: subprocess.Popen | None = None
-        self._auto_recv_running = False
-        self._auto_recv_code: str | None = None
-        self._auto_recv_opts: dict = {}
-        self._auto_recv_paused = False
-        # Local relay server
-        self._relay_process: subprocess.Popen | None = None
-        self._relay_port = 9009
         # LAN direct transfer
         self._lan_peer: LANPeer | None = None
         self._lan_peer_lock = threading.Lock()
 
     def set_window(self, window: webview.Window) -> None:
         self._window = window
-
-    # ── Local relay server ──
-
-    def _start_relay(self) -> None:
-        """Start a local croc relay so auto-receive can hold rooms open."""
-        if self._relay_process and self._relay_process.poll() is None:
-            return  # Already running
-        if not self._croc_path:
-            return
-
-        # Find a free port starting from 9009
-        port = 9009
-        for _attempt in range(10):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(("127.0.0.1", port))
-                    break
-            except OSError:
-                port += 10  # Try 9009, 9019, 9029...
-        else:
-            logger.error("Could not find free port for relay")
-            return
-
-        self._relay_port = port
-        # Relay uses 5 consecutive ports (port, port+1, ..., port+4)
-        ports = ",".join(str(port + i) for i in range(5))
-        cmd = [self._croc_path, "relay", "--host", "0.0.0.0", "--ports", ports]
-        logger.info("Starting local relay on port %d: %s", port, " ".join(cmd))
-        self._relay_process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=_NO_WINDOW,
-        )
-        # Give the relay a moment to start
-        time.sleep(0.5)
-        if self._relay_process.poll() is not None:
-            logger.error(
-                "Relay process exited immediately (port %d may be in use)", port
-            )
-            self._relay_process = None
-        else:
-            logger.info(
-                "Local relay running on port %d (PID %d)", port, self._relay_process.pid
-            )
-
-    def _stop_relay(self) -> None:
-        """Stop the local relay server."""
-        proc = self._relay_process
-        self._relay_process = None
-        _safe_close_process(proc)
-
-    def _relay_addr(self) -> str:
-        """Return the local relay address string for croc --relay flag."""
-        return f"localhost:{self._relay_port}"
 
     # ── Croc discovery ──
 
@@ -422,8 +355,8 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             # Dev mode fallback — just launch the new exe
             os.startfile(path)
 
-        # Clean up auto-receive before exiting
-        self._stop_auto_recv_internal()
+        # Clean up LAN peer before exiting
+        self._stop_lan_internal()
 
         if self._window:
             self._window.destroy()
@@ -582,9 +515,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             self._js_log("error", "No valid files selected")
             return
 
-        # Pause auto-receive to free the relay room
-        self._pause_auto_receive()
-
         with self._lock:
             self._transfer_active = True
         names = [os.path.basename(p) for p in valid]
@@ -603,9 +533,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             self._js_log("error", "No text provided")
             return
 
-        # Pause auto-receive to free the relay room
-        self._pause_auto_receive()
-
         with self._lock:
             self._transfer_active = True
         self._js_event("transfer_start", {"mode": "send", "files": ["(text)"]})
@@ -621,9 +548,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
         if not code:
             self._js_log("error", "No code provided")
             return
-
-        # Pause auto-receive to free the relay room
-        self._pause_auto_receive()
 
         with self._lock:
             self._transfer_active = True
@@ -645,213 +569,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
                 self._js_event("transfer_done", {"success": False, "stopped": True})
                 return True
         return False
-
-    # ── Auto-receive (background listener) ──
-
-    def start_auto_receive(self, code: str, options: dict | None = None) -> None:
-        """Start a background loop that keeps croc listening for incoming transfers.
-        Uses a local croc relay so the receiver can hold the room open waiting for a sender."""
-        if not self._croc_path:
-            self._js_log("error", "croc not found!")
-            return
-        code = (code or "").strip()
-        if not code:
-            return
-
-        # Stop any existing auto-receive first
-        self._stop_auto_recv_internal()
-
-        # Start local relay — this lets the receiver hold a room open
-        self._start_relay()
-
-        with self._auto_lock:
-            self._auto_recv_running = True
-            self._auto_recv_code = code
-            self._auto_recv_opts = options or {}
-        threading.Thread(target=self._auto_recv_loop, daemon=True).start()
-        self._js_event("auto_receive_started", {"code": code})
-        self._js_log("info", f"Auto-receive listening on code '{code}'")
-
-    def stop_auto_receive(self) -> None:
-        """Stop the background auto-receive listener and local relay."""
-        with self._auto_lock:
-            was_running = self._auto_recv_running
-        self._stop_auto_recv_internal()
-        self._stop_relay()
-        if was_running:
-            self._js_event("auto_receive_stopped", {})
-            self._js_log("info", "Auto-receive stopped")
-
-    def _stop_auto_recv_internal(self) -> None:
-        with self._auto_lock:
-            self._auto_recv_running = False
-            self._auto_recv_paused = False
-            proc = self._auto_recv_process
-            self._auto_recv_process = None
-        _safe_close_process(proc)
-
-    def _pause_auto_receive(self) -> None:
-        """Temporarily stop auto-receive so the relay room is free for manual transfers."""
-        with self._auto_lock:
-            if not self._auto_recv_running:
-                return
-            self._auto_recv_paused = True
-            self._auto_recv_running = False
-            proc = self._auto_recv_process
-            self._auto_recv_process = None
-        _safe_close_process(proc)
-        # Give relay time to release the room
-        time.sleep(1)
-        self._js_log("info", "Auto-receive paused for transfer")
-
-    def _resume_auto_receive(self) -> None:
-        """Restart auto-receive if it was paused by a manual transfer."""
-        with self._auto_lock:
-            if not self._auto_recv_paused:
-                return
-            self._auto_recv_paused = False
-            code = self._auto_recv_code
-            opts = self._auto_recv_opts.copy()
-        if code:
-            self._js_log("info", "Resuming auto-receive")
-            self.start_auto_receive(code, opts)
-
-    # Errors that mean "no sender is connected yet" — expected, don't spam the log
-    _QUIET_ERRORS = (
-        "not ready",
-        "peer disconnected",
-        "no rooms",
-        "room is full",
-        "problem with decoding",
-    )
-
-    def _auto_recv_loop(self) -> None:
-        """Continuously run croc receive, restarting after each completed transfer."""
-        consecutive_quiet = 0  # Track silent "no sender" failures
-        while True:
-            with self._auto_lock:
-                if not self._auto_recv_running:
-                    break
-                code = self._auto_recv_code
-                opts = self._auto_recv_opts.copy()
-
-            proc = None
-            received_files: list[str] = []
-            received_text: str | None = None
-            got_data = False  # True once we see "Receiving" (a real transfer started)
-            is_text = False  # True when receiving text message
-            try:
-                cmd = self._build_global_args(opts)
-                # Use local relay so the room stays open waiting for sender
-                if self._relay_process and self._relay_process.poll() is None:
-                    cmd += ["--relay", self._relay_addr()]
-                if opts.get("outFolder"):
-                    cmd += ["--out", opts["outFolder"]]
-                cmd.append(code)
-
-                logger.info("Auto-receive: listening...")
-                proc = subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    creationflags=_NO_WINDOW,
-                )
-                with self._auto_lock:
-                    self._auto_recv_process = proc
-
-                text_lines: list[str] = []
-                capture_text = False
-
-                for line in proc.stdout:
-                    line = line.rstrip()
-                    if not line:
-                        continue
-
-                    # Detect text message: croc outputs "Receiving text message"
-                    if "Receiving text" in line or "receiving text" in line:
-                        got_data = True
-                        is_text = True
-                        capture_text = True
-                        continue
-
-                    # Capture text content lines (after "Receiving text" header)
-                    if capture_text and not line.startswith("Receiving "):
-                        # Skip progress lines and croc status
-                        if "%" not in line and "|" not in line and "MB" not in line:
-                            text_lines.append(line)
-
-                    if line.startswith("Receiving '") and "'" in line[11:]:
-                        fname = line[11 : line.index("'", 11)]
-                        if fname and fname not in received_files:
-                            received_files.append(fname)
-                        got_data = True
-
-                    # Only show log lines to UI once a real transfer starts
-                    if got_data and not capture_text:
-                        self._js_log("info", f"[auto] {line}")
-                    elif not got_data:
-                        logger.debug("Auto-receive: %s", line)
-
-                if text_lines:
-                    received_text = "\n".join(text_lines)
-
-                proc.wait(timeout=3600)
-                success = proc.returncode == 0
-
-                with self._auto_lock:
-                    self._auto_recv_process = None
-
-                if success and got_data:
-                    consecutive_quiet = 0
-                    if is_text and received_text:
-                        self._js_event(
-                            "auto_receive_done",
-                            {
-                                "success": True,
-                                "files": ["(text)"],
-                                "text": received_text,
-                            },
-                        )
-                        self._js_log("success", "Auto-receive: text received!")
-                    else:
-                        self._js_event(
-                            "auto_receive_done",
-                            {
-                                "success": True,
-                                "files": received_files,
-                            },
-                        )
-                        names = ", ".join(received_files) if received_files else "file"
-                        self._js_log("success", f"Auto-receive: received {names}!")
-                elif not success and self._auto_recv_running:
-                    if got_data:
-                        consecutive_quiet = 0
-                        self._js_log(
-                            "warn", "Auto-receive: transfer failed, retrying..."
-                        )
-                    else:
-                        consecutive_quiet += 1
-                        logger.debug(
-                            "Auto-receive: no sender (attempt %d)", consecutive_quiet
-                        )
-
-            except subprocess.TimeoutExpired:
-                logger.warning("Auto-receive: process timed out, restarting")
-            except Exception as e:
-                logger.error("Auto-receive error: %s", e)
-            finally:
-                _safe_close_process(proc)
-                with self._auto_lock:
-                    self._auto_recv_process = None
-                    if not self._auto_recv_running:
-                        break
-
-            # Back off: short wait normally, longer after many silent failures
-            wait = min(5 + consecutive_quiet * 2, 30)
-            time.sleep(wait)
 
     # ── LAN Direct Transfer ──
 
@@ -1030,7 +747,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             with self._lock:
                 self._process = None
                 self._transfer_active = False
-            self._resume_auto_receive()
 
     def _run_send_text(self, text: str, opts: dict) -> None:
         proc = None
@@ -1082,7 +798,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             with self._lock:
                 self._process = None
                 self._transfer_active = False
-            self._resume_auto_receive()
 
     def _run_receive(self, code: str, opts: dict) -> None:
         proc = None
@@ -1140,7 +855,6 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
             with self._lock:
                 self._process = None
                 self._transfer_active = False
-            self._resume_auto_receive()
 
     # ── JS bridge helpers ──
 
