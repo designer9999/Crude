@@ -8,7 +8,7 @@
   import { getThemeState } from "$lib/theme/theme-store.svelte";
   import { applyThemeToDOM } from "$lib/theme/apply-theme";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { getStatus, stopTransfer, checkUpdate, downloadUpdate, launchUpdate, installCroc, sendFiles, sendText, startLAN, stopLAN, lanSendText, lanSendFiles, setFocused, setNotifications } from "$lib/api/bridge";
+  import { getStatus, stopTransfer, checkUpdate, downloadUpdate, launchUpdate, installCroc, sendFiles, sendText, startLAN, stopLAN, lanSendText, lanSendFiles, setFocused, setNotifications, getFileInfo } from "$lib/api/bridge";
   import Icon from "$lib/ui/Icon.svelte";
   import IconButton from "$lib/ui/IconButton.svelte";
   import Button from "$lib/ui/Button.svelte";
@@ -212,6 +212,14 @@
             ? `Received ${lanFiles.join(", ")}`
             : "Files received!";
           showSnackbar(lanSummary);
+          break;
+        }
+
+        case "files_dropped": {
+          const paths: string[] = data.paths ?? [];
+          for (const p of paths) {
+            getFileInfo(p).then(info => app.addFile(p, info));
+          }
           break;
         }
 

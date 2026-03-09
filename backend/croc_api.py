@@ -19,6 +19,7 @@ import threading
 import webbrowser
 
 import webview
+from webview.dom import DOMEventHandler
 
 from backend.lan_server import LANPeer
 from backend.updater import check_for_updates, download_update
@@ -81,6 +82,28 @@ class CrocAPI:
 
     def set_window(self, window: webview.Window) -> None:
         self._window = window
+        self._bind_drop_handler(window)
+
+    def _bind_drop_handler(self, window: webview.Window) -> None:
+        """Bind native drop handler to get full file paths from pywebview."""
+        def _on_drag(e):
+            pass
+
+        def _on_drop(e):
+            files = e.get("dataTransfer", {}).get("files", [])
+            paths = []
+            for f in files:
+                full_path = f.get("pywebviewFullPath")
+                if full_path and os.path.exists(full_path):
+                    paths.append(full_path)
+            if paths:
+                self._js_event("files_dropped", {"paths": paths})
+
+        try:
+            window.dom.document.events.dragover += DOMEventHandler(_on_drag, True, False, debounce=500)
+            window.dom.document.events.drop += DOMEventHandler(_on_drop, True, False)
+        except Exception as e:
+            logger.warning("Failed to bind drop handler: %s", e)
 
     def set_focused(self, focused: bool) -> None:
         self._window_focused = focused

@@ -37,17 +37,8 @@
     e.preventDefault();
     e.stopPropagation();
     dragOver = false;
-
-    const files = e.dataTransfer?.files;
-    if (files && files.length > 0) {
-      const paths: string[] = [];
-      for (let i = 0; i < files.length; i++) {
-        const f = files[i] as any;
-        const path = f.path || f.name;
-        if (path) paths.push(path);
-      }
-      if (paths.length > 0) onadd?.(paths);
-    }
+    // Full file paths come from Python via "files_dropped" event
+    // (pywebview's pywebviewFullPath — browser JS can't access real paths)
   }
 </script>
 
