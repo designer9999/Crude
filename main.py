@@ -199,14 +199,7 @@ def main():
 
     api.set_window(window)
 
-    def _on_closing():
-        """Hard-kill everything when the window X is pressed."""
-        api._cleanup()
-        _kill_all_croc()
-        _release_single_instance()
-        os._exit(0)
-
-    window.events.closing += _on_closing
+    window.events.closing += lambda: os._exit(0)
 
     storage = os.path.join(
         os.environ.get("APPDATA", tempfile.gettempdir()),
@@ -215,8 +208,7 @@ def main():
     webview.start(debug=dev_mode, private_mode=False, storage_path=storage)
 
     # Fallback if closing event didn't fire
-    api._cleanup()
-    _kill_all_croc()
+    os._exit(0)
 
 
 if __name__ == "__main__":

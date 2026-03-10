@@ -47,20 +47,18 @@
   {/if}
 
   {#if contact}
-    <!-- Contact header — compact, with LAN status -->
-    <div class="flex items-center gap-3 px-1">
-      <ContactAvatar name={contact.name} color={contact.color} size="lg" />
-      <div class="flex-1 min-w-0">
-        <div class="text-lg font-medium text-on-surface truncate">{contact.name}</div>
-        {#if app.lanConnected}
-          <div class="flex items-center gap-1 text-xs text-primary">
-            <Icon name="bolt" size={12} />
-            LAN direct — {app.lanPeerIp}
-          </div>
-        {:else}
-          <div class="text-xs text-on-surface-variant">Searching for peer on LAN...</div>
-        {/if}
-      </div>
+    <!-- Contact header — minimal inline -->
+    <div class="flex items-center gap-2 px-1">
+      <ContactAvatar name={contact.name} color={contact.color} size="sm" />
+      <span class="text-sm font-medium text-on-surface truncate flex-1">{contact.name}</span>
+      {#if app.lanConnected}
+        <span class="flex items-center gap-1 text-[11px] text-primary">
+          <Icon name="bolt" size={11} />
+          LAN — {app.lanPeerIp}
+        </span>
+      {:else}
+        <span class="text-[11px] text-on-surface-variant">Searching LAN...</span>
+      {/if}
     </div>
   {/if}
 

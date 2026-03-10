@@ -1,5 +1,6 @@
 <!--
-  File list — shows selected files with icon, name, size, and remove button.
+  File list — shows selected files as compact thumbnails (images) or cards (other files).
+  Claude-style: images as small square thumbnails in a row, files as compact chips.
 -->
 <script lang="ts">
   import Icon from "$lib/ui/Icon.svelte";
@@ -7,9 +8,15 @@
 
   const app = getAppState();
 
+  const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".bmp", ".ico"]);
+
+  function isImage(type: string): boolean {
+    return IMAGE_EXTS.has(type);
+  }
+
   function iconForType(type: string): string {
     if (type === "folder") return "folder";
-    if ([".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".bmp"].includes(type)) return "image";
+    if (isImage(type)) return "image";
     if ([".mp4", ".avi", ".mkv", ".mov", ".webm"].includes(type)) return "movie";
     if ([".mp3", ".wav", ".flac", ".ogg", ".aac"].includes(type)) return "audio_file";
     if ([".zip", ".rar", ".7z", ".tar", ".gz"].includes(type)) return "folder_zip";
@@ -18,55 +25,171 @@
     if ([".xls", ".xlsx", ".csv"].includes(type)) return "table_chart";
     return "draft";
   }
+
+  function fileUrl(path: string): string {
+    return "file:///" + path.replace(/\\/g, "/");
+  }
+
+  const images = $derived(app.files.filter(f => f.info && isImage(f.info.type)));
+  const otherFiles = $derived(app.files.filter(f => !f.info || !isImage(f.info.type)));
 </script>
 
-<div class="flex flex-col gap-1 max-h-48 overflow-y-auto">
-  {#each app.files as file (file.path)}
-    <div class="file-item group flex items-center gap-3 px-3 py-2.5 rounded-sm relative">
-      <!-- State layer -->
-      <div
-        class="absolute inset-0 rounded-sm bg-on-surface opacity-0 state-layer"
-        style="transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);"
-      ></div>
+<!-- Image thumbnails row (Claude-style compact squares) -->
+{#if images.length > 0}
+  <div class="thumb-row">
+    {#each images as file (file.path)}
+      <div class="thumb-wrap group">
+        <img
+          src={fileUrl(file.path)}
+          alt={file.info?.name ?? "image"}
+          class="thumb-img"
+          loading="lazy"
+        />
+        {#if !app.transferActive}
+          <button
+            class="thumb-remove"
+            onclick={() => app.removeFile(file.path)}
+            title="Remove"
+          >
+            <Icon name="close" size={12} />
+          </button>
+        {/if}
+      </div>
+    {/each}
+  </div>
+{/if}
 
-      <!-- Icon -->
-      <span class="relative z-10 text-primary shrink-0">
-        <Icon name={file.info ? iconForType(file.info.type) : "draft"} size={22} />
-      </span>
-
-      <!-- Name + meta -->
-      <div class="relative z-10 flex-1 min-w-0">
-        <div class="text-sm text-on-surface truncate">
-          {file.info?.name ?? file.path.split(/[\\/]/).pop()}
-        </div>
-        <div class="text-xs text-on-surface-variant">
+<!-- Non-image files as compact chips -->
+{#if otherFiles.length > 0}
+  <div class="file-chips">
+    {#each otherFiles as file (file.path)}
+      <div class="file-chip group">
+        <span class="text-primary shrink-0">
+          <Icon name={file.info ? iconForType(file.info.type) : "draft"} size={16} />
+        </span>
+        <div class="file-chip-info">
+          <span class="file-chip-name">{file.info?.name ?? file.path.split(/[\\/]/).pop()}</span>
           {#if file.info}
-            {file.info.size}
-            {#if file.info.type === "folder" && file.info.count != null}
-              &middot; {file.info.count} {file.info.count === 1 ? "file" : "files"}
-            {/if}
+            <span class="file-chip-size">{file.info.size}</span>
           {/if}
         </div>
+        {#if !app.transferActive}
+          <button
+            class="file-chip-remove"
+            onclick={() => app.removeFile(file.path)}
+            title="Remove"
+          >
+            <Icon name="close" size={14} />
+          </button>
+        {/if}
       </div>
-
-      <!-- Remove (hidden during active transfer) -->
-      {#if !app.transferActive}
-        <button
-          class="relative z-10 shrink-0 w-7 h-7 rounded-full flex items-center justify-center
-                 text-on-surface-variant cursor-pointer opacity-0 group-hover:opacity-100
-                 transition-opacity"
-          onclick={() => app.removeFile(file.path)}
-          title="Remove"
-        >
-          <Icon name="close" size={16} />
-        </button>
-      {/if}
-    </div>
-  {/each}
-</div>
+    {/each}
+  </div>
+{/if}
 
 <style>
-  .file-item:hover .state-layer {
-    opacity: 0.04;
+  /* ── Image Thumbnails ── */
+  .thumb-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .thumb-wrap {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--md-sys-color-surface-container);
+    flex-shrink: 0;
+  }
+  .thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .thumb-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    padding: 0;
+  }
+  .thumb-wrap:hover .thumb-remove {
+    opacity: 1;
+  }
+
+  /* ── File Chips ── */
+  .file-chips {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .file-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--md-sys-color-on-surface) 5%, transparent);
+    transition: background 0.15s ease;
+  }
+  .file-chip:hover {
+    background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  }
+  .file-chip-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .file-chip-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--md-sys-color-on-surface);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .file-chip-size {
+    font-size: 10px;
+    color: var(--md-sys-color-on-surface-variant);
+    opacity: 0.6;
+    flex-shrink: 0;
+  }
+  .file-chip-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .file-chip:hover .file-chip-remove {
+    opacity: 1;
+  }
+  .file-chip-remove:hover {
+    color: var(--md-sys-color-error);
   }
 </style>
