@@ -9,9 +9,16 @@
   import IconButton from "$lib/ui/IconButton.svelte";
   import TextField from "$lib/ui/TextField.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
+  import type { MessageAttachment } from "$lib/state/app-state.svelte";
   import { pickFiles, pickFolder, getFileInfo, copyToClipboard } from "$lib/api/bridge";
   import DropZone from "../send/DropZone.svelte";
   import FileList from "../send/FileList.svelte";
+
+  const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".svg"]);
+  function isImage(name: string): boolean {
+    const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+    return IMAGE_EXTS.has(ext);
+  }
 
   interface Props {
     contactName?: string;
@@ -48,6 +55,9 @@
     return msgs;
   });
 
+  // Show toolbar if there are any messages at all OR we're in starred/search mode
+  const showToolbar = $derived(app.messages.length > 0 || showStarredOnly || searchOpen);
+
   // Auto-scroll to bottom only when user is near the bottom
   let wasAtBottom = true;
   $effect(() => {
@@ -66,7 +76,7 @@
     wasAtBottom = scrollTop + clientHeight >= scrollHeight - 60;
   }
 
-  // Message grouping: consecutive same-direction messages get visual grouping
+  // Message grouping
   function getBubblePosition(index: number): "solo" | "first" | "middle" | "last" {
     const msgs = displayMessages;
     const curr = msgs[index];
@@ -91,7 +101,7 @@
     return app.contacts.find(c => c.id === contactId)?.name ?? "Unknown";
   }
 
-  function formatTime(ts: number): string {
+  function formatTime(ts: string): string {
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
@@ -158,7 +168,7 @@
     </div>
   {/if}
 
-  <!-- Message section — collapsible, open by default -->
+  <!-- Message section -->
   <div class="mt-3 pt-3 border-t border-outline-variant">
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -168,6 +178,9 @@
     >
       <Icon name="chat" size={18} />
       <span class="text-sm font-medium text-on-surface-variant flex-1">Messages</span>
+      {#if app.messages.length > 0}
+        <span class="text-[10px] text-on-surface-variant opacity-50">{app.messages.length}</span>
+      {/if}
       <span class="text-on-surface-variant section-arrow" class:section-arrow-open={msgOpen}>
         <Icon name="expand_more" size={20} />
       </span>
@@ -175,8 +188,8 @@
 
     {#if msgOpen}
       <div class="section-enter">
-        <!-- Chat toolbar -->
-        {#if app.messages.length > 0}
+        <!-- Chat toolbar — always visible when section is open -->
+        {#if showToolbar}
           <div class="chat-toolbar">
             <button
               class="chip"
@@ -191,7 +204,7 @@
               class:chip-active={showStarredOnly}
               onclick={() => showStarredOnly = !showStarredOnly}
             >
-              <Icon name={showStarredOnly ? "star" : "star_border"} size={12} />
+              <Icon name={showStarredOnly ? "star" : "star_border"} size={11} />
               Saved
             </button>
 
@@ -203,7 +216,7 @@
               onclick={() => { searchOpen = !searchOpen; if (!searchOpen) app.messageSearch = ""; }}
               title="Search messages"
             >
-              <Icon name="search" size={16} />
+              <Icon name="search" size={15} />
             </button>
 
             <div class="relative">
@@ -212,7 +225,7 @@
                 onclick={() => showClearMenu = !showClearMenu}
                 title="Clear messages"
               >
-                <Icon name="delete_outline" size={16} />
+                <Icon name="delete_outline" size={15} />
               </button>
               {#if showClearMenu}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -246,70 +259,112 @@
               />
             </div>
           {/if}
+        {/if}
 
-          <!-- Message list -->
-          {#if displayMessages.length > 0}
-            <div
-              bind:this={messagesEl}
-              class="chat-area"
-              onscroll={handleScroll}
-            >
-              {#each displayMessages as msg, i (msg.id)}
-                {@const pos = getBubblePosition(i)}
-                {@const isSent = msg.direction === "sent"}
+        <!-- Message list -->
+        {#if displayMessages.length > 0}
+          <div
+            bind:this={messagesEl}
+            class="chat-area"
+            onscroll={handleScroll}
+          >
+            {#each displayMessages as msg, i (msg.id)}
+              {@const pos = getBubblePosition(i)}
+              {@const isSent = msg.direction === "sent"}
+              {@const hasAttachments = msg.attachments && msg.attachments.length > 0}
+              {@const images = msg.attachments?.filter(a => a.type === "image") ?? []}
+              {@const files = msg.attachments?.filter(a => a.type === "file") ?? []}
+              <div
+                class="msg-row"
+                class:msg-row-sent={isSent}
+                class:msg-row-received={!isSent}
+                class:msg-group-break={pos === "solo" || pos === "first"}
+              >
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
-                  class="msg-row"
-                  class:msg-row-sent={isSent}
-                  class:msg-row-received={!isSent}
-                  class:msg-group-break={pos === "solo" || pos === "first"}
+                  class="bubble"
+                  class:bubble-sent={isSent}
+                  class:bubble-received={!isSent}
+                  class:bubble-solo={pos === "solo"}
+                  class:bubble-first={pos === "first"}
+                  class:bubble-middle={pos === "middle"}
+                  class:bubble-last={pos === "last"}
+                  class:bubble-copied={copiedMsgId === msg.id}
+                  class:bubble-media={hasAttachments && !msg.text}
+                  onclick={() => msg.text && handleCopy(msg.id, msg.text)}
+                  title={msg.text ? "Click to copy" : ""}
                 >
-                  <!-- svelte-ignore a11y_click_events_have_key_events -->
-                  <!-- svelte-ignore a11y_no_static_element_interactions -->
-                  <div
-                    class="bubble"
-                    class:bubble-sent={isSent}
-                    class:bubble-received={!isSent}
-                    class:bubble-solo={pos === "solo"}
-                    class:bubble-first={pos === "first"}
-                    class:bubble-middle={pos === "middle"}
-                    class:bubble-last={pos === "last"}
-                    class:bubble-copied={copiedMsgId === msg.id}
-                    onclick={() => handleCopy(msg.id, msg.text)}
-                    title="Click to copy"
-                  >
-                    {#if app.messageViewAll}
-                      <div class="bubble-contact">{getContactName(msg.contactId)}</div>
-                    {/if}
+                  {#if app.messageViewAll}
+                    <div class="bubble-contact">{getContactName(msg.contactId)}</div>
+                  {/if}
+
+                  <!-- Image attachments -->
+                  {#if images.length > 0}
+                    <div class="att-images" class:att-grid={images.length > 1}>
+                      {#each images as img}
+                        <div class="att-img-wrap">
+                          <img
+                            src={"file:///" + img.path.replace(/\\/g, "/")}
+                            alt={img.name}
+                            class="att-img"
+                            loading="lazy"
+                          />
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+
+                  <!-- File attachments -->
+                  {#if files.length > 0}
+                    <div class="att-files">
+                      {#each files as file}
+                        <div class="att-file">
+                          <Icon name="insert_drive_file" size={18} />
+                          <div class="att-file-info">
+                            <span class="att-file-name">{file.name}</span>
+                            {#if file.size}
+                              <span class="att-file-size">{file.size}</span>
+                            {/if}
+                          </div>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+
+                  <!-- Text content -->
+                  {#if msg.text}
                     <span class="bubble-text">{msg.text}</span>
-                    <span class="bubble-time-spacer"></span>
-                    <span class="bubble-meta">
-                      {#if copiedMsgId === msg.id}
-                        <span class="bubble-copied-badge"><Icon name="check" size={10} /> Copied</span>
-                      {:else}
-                        <button
-                          class="star-btn"
-                          class:starred={msg.starred}
-                          onclick={(e) => { e.stopPropagation(); app.toggleStar(msg.id); }}
-                          title={msg.starred ? "Unsave" : "Save"}
-                        >
-                          <Icon name={msg.starred ? "star" : "star_border"} size={11} />
-                        </button>
-                        <span class="bubble-time">{formatTime(msg.timestamp)}</span>
-                      {/if}
-                    </span>
-                  </div>
+                  {/if}
+
+                  <span class="bubble-time-spacer"></span>
+                  <span class="bubble-meta">
+                    {#if copiedMsgId === msg.id}
+                      <span class="bubble-copied-badge"><Icon name="check" size={10} /> Copied</span>
+                    {:else}
+                      <button
+                        class="star-btn"
+                        class:starred={msg.starred}
+                        onclick={(e) => { e.stopPropagation(); app.toggleStar(msg.id); }}
+                        title={msg.starred ? "Unsave" : "Save"}
+                      >
+                        <Icon name={msg.starred ? "star" : "star_border"} size={11} />
+                      </button>
+                      <span class="bubble-time">{formatTime(msg.timestamp)}</span>
+                    {/if}
+                  </span>
                 </div>
-              {/each}
-            </div>
-          {:else if app.messageSearch || showStarredOnly}
-            <div class="chat-empty">
-              <Icon name={showStarredOnly ? "star_border" : "search_off"} size={32} />
-              <span>{showStarredOnly ? "No saved messages" : "No results"}</span>
-            </div>
-          {/if}
-        {:else}
+              </div>
+            {/each}
+          </div>
+        {:else if showStarredOnly || app.messageSearch}
+          <div class="chat-empty">
+            <Icon name={showStarredOnly ? "star_border" : "search_off"} size={28} />
+            <span>{showStarredOnly ? "No saved messages" : "No results"}</span>
+          </div>
+        {:else if !showToolbar}
           <div class="chat-empty mt-3">
-            <Icon name="chat_bubble_outline" size={32} />
+            <Icon name="chat_bubble_outline" size={28} />
             <span>No messages yet</span>
           </div>
         {/if}
@@ -376,8 +431,8 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-top: 12px;
-    margin-bottom: 8px;
+    margin-top: 10px;
+    margin-bottom: 6px;
     flex-wrap: wrap;
   }
   .chip {
@@ -385,7 +440,7 @@
     align-items: center;
     gap: 3px;
     font-size: 11px;
-    padding: 3px 10px;
+    padding: 2px 9px;
     border-radius: 99px;
     border: none;
     cursor: pointer;
@@ -403,7 +458,7 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    padding: 4px;
+    padding: 3px;
     border-radius: 4px;
     color: var(--md-sys-color-on-surface-variant);
     transition: all var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
@@ -416,9 +471,9 @@
   .chat-area {
     display: flex;
     flex-direction: column;
-    max-height: 280px;
+    max-height: 300px;
     overflow-y: auto;
-    padding: 8px 4px;
+    padding: 6px 2px;
     scrollbar-width: thin;
     scrollbar-color: color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent) transparent;
   }
@@ -435,7 +490,7 @@
     justify-content: flex-start;
   }
   .msg-group-break {
-    margin-top: 10px;
+    margin-top: 8px;
   }
   .msg-row:first-child {
     margin-top: 0;
@@ -446,29 +501,29 @@
     position: relative;
     max-width: clamp(140px, 78%, 400px);
     width: fit-content;
-    padding: 7px 10px 4px;
+    padding: 6px 10px 4px;
     cursor: pointer;
     overflow-wrap: break-word;
     word-break: break-word;
     animation: bubble-in var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial) both;
   }
+  .bubble-media {
+    padding: 4px 4px 4px;
+  }
   @keyframes bubble-in {
-    from { opacity: 0; transform: translateY(4px) scale(0.97); }
+    from { opacity: 0; transform: translateY(3px) scale(0.98); }
     to   { opacity: 1; transform: translateY(0) scale(1); }
   }
 
-  /* Sent bubble — right side, primary tint */
   .bubble-sent {
     background: var(--md-sys-color-primary-container);
     color: var(--md-sys-color-on-primary-container);
   }
-  /* Received bubble — left side, surface */
   .bubble-received {
     background: var(--md-sys-color-surface-container-high);
     color: var(--md-sys-color-on-surface);
   }
 
-  /* Bubble grouping corner radius (sent = right side corners change) */
   .bubble-sent.bubble-solo   { border-radius: 18px 18px 4px 18px; }
   .bubble-sent.bubble-first  { border-radius: 18px 18px 4px 18px; }
   .bubble-sent.bubble-middle { border-radius: 18px 4px 4px 18px; }
@@ -479,7 +534,6 @@
   .bubble-received.bubble-middle { border-radius: 4px 18px 18px 4px; }
   .bubble-received.bubble-last   { border-radius: 4px 18px 18px 18px; }
 
-  /* Hover state layer */
   .bubble::after {
     content: "";
     position: absolute;
@@ -488,10 +542,10 @@
     background: var(--md-sys-color-on-surface);
     opacity: 0;
     pointer-events: none;
-    transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
+    transition: opacity 0.15s ease;
   }
-  .bubble:hover::after { opacity: 0.06; }
-  .bubble:active::after { opacity: 0.1; }
+  .bubble:hover::after { opacity: 0.05; }
+  .bubble:active::after { opacity: 0.08; }
 
   .bubble-copied {
     animation: bubble-flash 0.2s ease;
@@ -506,25 +560,24 @@
     font-size: 10px;
     font-weight: 500;
     color: var(--md-sys-color-primary);
-    margin-bottom: 2px;
+    margin-bottom: 1px;
   }
   .bubble-text {
     font-family: var(--md-sys-typescale-body-small-font, "Roboto Mono", monospace);
     font-size: 13px;
-    line-height: 1.45;
+    line-height: 1.4;
     white-space: pre-wrap;
     user-select: text;
   }
-  /* Invisible spacer to reserve room for the timestamp so text doesn't overlap */
   .bubble-time-spacer {
     display: inline-block;
-    width: 64px;
+    width: 58px;
     height: 1px;
   }
   .bubble-meta {
     position: absolute;
     right: 8px;
-    bottom: 4px;
+    bottom: 3px;
     display: flex;
     align-items: center;
     gap: 3px;
@@ -532,7 +585,7 @@
   .bubble-time {
     font-size: 10px;
     line-height: 1;
-    opacity: 0.5;
+    opacity: 0.45;
     white-space: nowrap;
   }
   .bubble-copied-badge {
@@ -572,17 +625,77 @@
     opacity: 1;
   }
 
+  /* ── Attachments: Images ── */
+  .att-images {
+    margin-bottom: 4px;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .att-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 3px;
+  }
+  .att-img-wrap {
+    position: relative;
+    background: var(--md-sys-color-surface-container);
+    min-height: 60px;
+  }
+  .att-img {
+    display: block;
+    width: 100%;
+    max-height: 200px;
+    object-fit: cover;
+    cursor: pointer;
+  }
+  .att-grid .att-img {
+    aspect-ratio: 1;
+    max-height: none;
+  }
+
+  /* ── Attachments: Files ── */
+  .att-files {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+  .att-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
+  }
+  .att-file-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .att-file-name {
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .att-file-size {
+    font-size: 10px;
+    opacity: 0.5;
+  }
+
   /* ── Empty State ── */
   .chat-empty {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    padding: 24px 0;
+    gap: 4px;
+    padding: 20px 0;
     color: var(--md-sys-color-on-surface-variant);
-    opacity: 0.5;
-    font-size: 13px;
+    opacity: 0.4;
+    font-size: 12px;
   }
 
   /* ── Clear Menu ── */
@@ -609,7 +722,7 @@
     color: var(--md-sys-color-on-surface);
     font-size: 12px;
     cursor: pointer;
-    transition: background var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
+    transition: background 0.15s ease;
   }
   .clear-menu button:hover {
     background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);

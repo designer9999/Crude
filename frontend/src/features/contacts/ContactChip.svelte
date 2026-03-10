@@ -19,8 +19,8 @@
 </script>
 
 <button
-  class="group relative inline-flex items-center gap-1.5 h-8 pl-1 pr-3 rounded-full
-         text-sm font-medium cursor-pointer select-none overflow-hidden shrink-0"
+  class="group relative inline-flex items-center gap-1 h-7 pl-0.5 pr-2.5 rounded-full
+         text-xs font-medium cursor-pointer select-none overflow-hidden shrink-0"
   style="
     background-color: {selected ? 'var(--md-sys-color-secondary-container)' : 'transparent'};
     border: {selected ? '1px solid transparent' : '1px solid var(--md-sys-color-outline-variant)'};

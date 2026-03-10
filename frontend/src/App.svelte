@@ -9,6 +9,18 @@
   import { applyThemeToDOM } from "$lib/theme/apply-theme";
   import { getAppState } from "$lib/state/app-state.svelte";
   import { getStatus, stopTransfer, checkUpdate, downloadUpdate, launchUpdate, installCroc, sendFiles, sendText, startLAN, stopLAN, lanSendText, lanSendFiles, setFocused, setNotifications, getFileInfo } from "$lib/api/bridge";
+  import type { MessageAttachment } from "$lib/state/app-state.svelte";
+
+  const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".svg"]);
+  function fileIsImage(name: string): boolean {
+    const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+    return IMAGE_EXTS.has(ext);
+  }
+  function fileSizeStr(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
   import Icon from "$lib/ui/Icon.svelte";
   import IconButton from "$lib/ui/IconButton.svelte";
   import Button from "$lib/ui/Button.svelte";
@@ -198,6 +210,7 @@
         case "lan_files_received": {
           const lanFileContact = app.activeContact;
           const lanFiles: string[] = data.files ?? [];
+          const fileDetails: Array<{name: string; path: string; size: number}> = data.file_details ?? [];
           if (lanFileContact) {
             app.addActivity({
               contactId: lanFileContact.id,
@@ -207,6 +220,21 @@
               success: true,
               outFolder: app.effectiveReceiveOptions.outFolder,
             });
+            // Add as chat message with attachments
+            if (fileDetails.length > 0) {
+              const attachments: MessageAttachment[] = fileDetails.map(f => ({
+                name: f.name,
+                path: f.path,
+                size: fileSizeStr(f.size),
+                type: fileIsImage(f.name) ? "image" as const : "file" as const,
+              }));
+              app.addMessage({
+                contactId: lanFileContact.id,
+                direction: "received",
+                text: "",
+                attachments,
+              });
+            }
           }
           const lanSummary = lanFiles.length > 0
             ? `Received ${lanFiles.join(", ")}`
@@ -276,15 +304,30 @@
 
     // LAN direct — instant transfer (no croc fallback when connected)
     if (app.lanConnected) {
+      const filesCopy = [...app.files];
       const sent = await lanSendFiles(app.filePaths);
       if (sent) {
         if (contact) {
+          const names = filesCopy.map(f => f.info?.name ?? f.path.split(/[\\/]/).pop() ?? "file");
           app.addActivity({
             contactId: contact.id,
             direction: "sent",
             type: "files",
-            items: app.files.map(f => f.info?.name ?? f.path.split(/[\\/]/).pop() ?? "file"),
+            items: names,
             success: true,
+          });
+          // Add as chat message with attachments
+          const attachments: MessageAttachment[] = filesCopy.map(f => ({
+            name: f.info?.name ?? f.path.split(/[\\/]/).pop() ?? "file",
+            path: f.path,
+            size: f.info?.size ?? "",
+            type: fileIsImage(f.info?.name ?? f.path) ? "image" as const : "file" as const,
+          }));
+          app.addMessage({
+            contactId: contact.id,
+            direction: "sent",
+            text: "",
+            attachments,
           });
         }
         app.clearFiles();
@@ -348,21 +391,18 @@
 
 <div class="flex flex-col h-screen bg-surface text-on-surface overflow-hidden select-none">
 
-  <!-- Top App Bar -->
-  <div class="flex items-center gap-3 px-4 py-2.5 min-h-14">
-    <span class="text-primary"><Icon name="swap_horiz" size={28} /></span>
-    <h1 class="flex-1 text-xl font-normal text-on-surface" style="font-family: var(--font-brand);">Croc Transfer</h1>
-    <span
-      class="text-[11px] font-medium px-2.5 py-1 rounded-full
-             bg-surface-container-high text-on-surface-variant"
-    >
+  <!-- Top App Bar — compact -->
+  <div class="flex items-center gap-2 px-3 py-1.5">
+    <span class="text-primary"><Icon name="swap_horiz" size={22} /></span>
+    <h1 class="flex-1 text-base font-medium text-on-surface" style="font-family: var(--font-brand);">Croc Transfer</h1>
+    <span class="text-[10px] px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant">
       v{appVersion}
     </span>
     <IconButton
       title="Settings"
       onclick={() => app.activeView = app.activeView === "settings" ? "transfer" : "settings"}
     >
-      <Icon name={app.activeView === "settings" ? "close" : "settings"} size={24} />
+      <Icon name={app.activeView === "settings" ? "close" : "settings"} size={20} />
     </IconButton>
   </div>
 

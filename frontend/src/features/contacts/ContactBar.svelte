@@ -85,7 +85,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 12px;
+    padding: 4px 8px;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;

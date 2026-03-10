@@ -694,8 +694,8 @@ class LANPeer:
 
         self._handle_disconnect(conn)
 
-    def _recv_file(self, conn: socket.socket, header: dict) -> None:
-        """Receive a single file from the connection."""
+    def _recv_file(self, conn: socket.socket, header: dict) -> str | None:
+        """Receive a single file from the connection. Returns output path."""
         name = header.get("name", "unnamed")
         size = header.get("size", 0)
 
@@ -705,7 +705,7 @@ class LANPeer:
         if not out_path.startswith(os.path.normpath(out_dir)):
             logger.error("Path traversal attempt: %s", name)
             _recv_exact(conn, size)
-            return
+            return None
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
@@ -714,12 +714,13 @@ class LANPeer:
 
         if result is not None:
             logger.info("Received file: %s (%d bytes)", name, size)
-        else:
-            logger.error("Incomplete file: %s", name)
+            return out_path
+        logger.error("Incomplete file: %s", name)
+        return None
 
     def _recv_batch(self, conn: socket.socket, count: int) -> None:
         """Receive a batch of files/directories."""
-        received_files: list[str] = []
+        received_files: list[dict] = []
 
         while True:
             msg = _recv_msg(conn)
@@ -736,11 +737,21 @@ class LANPeer:
                     if dir_path.startswith(os.path.normpath(out_dir)):
                         os.makedirs(dir_path, exist_ok=True)
                 case "file":
-                    self._recv_file(conn, msg)
-                    received_files.append(os.path.basename(msg.get("name", "unnamed")))
+                    out_path = self._recv_file(conn, msg)
+                    name = os.path.basename(msg.get("name", "unnamed"))
+                    size = msg.get("size", 0)
+                    received_files.append({
+                        "name": name,
+                        "path": out_path or "",
+                        "size": size,
+                    })
 
         if received_files:
-            self._on_event("lan_files_received", {"files": received_files})
+            names = [f["name"] for f in received_files]
+            self._on_event("lan_files_received", {
+                "files": names,
+                "file_details": received_files,
+            })
 
     def _ping_loop(self) -> None:
         """Send periodic pings to detect dead connections."""

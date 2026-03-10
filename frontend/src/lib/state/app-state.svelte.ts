@@ -38,6 +38,13 @@ export interface ActivityEntry {
   outFolder?: string;
 }
 
+export interface MessageAttachment {
+  name: string;
+  path: string;
+  size?: string;
+  type: "image" | "file";
+}
+
 export interface MessageEntry {
   id: string;
   contactId: string;
@@ -45,6 +52,7 @@ export interface MessageEntry {
   text: string;
   timestamp: string;
   starred?: boolean;
+  attachments?: MessageAttachment[];
 }
 
 export interface SelectedFile {
