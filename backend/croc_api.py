@@ -473,6 +473,21 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
                 subprocess.Popen(["xdg-open", path])
         return True
 
+    def show_in_explorer(self, path: str) -> bool:
+        """Open Explorer with the file selected (ready to drag)."""
+        path = os.path.normpath(path)
+        if not os.path.exists(path):
+            return False
+        match sys.platform:
+            case "win32":
+                subprocess.Popen(["explorer", "/select,", path])
+            case "darwin":
+                subprocess.Popen(["open", "-R", path])
+            case _:
+                # Linux: open containing folder
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        return True
+
     def copy_to_clipboard(self, text: str) -> None:
         """Copy text to system clipboard."""
         if self._window:

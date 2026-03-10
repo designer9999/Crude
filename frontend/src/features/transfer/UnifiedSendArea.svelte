@@ -8,7 +8,7 @@
   import TextField from "$lib/ui/TextField.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
   import type { MessageAttachment } from "$lib/state/app-state.svelte";
-  import { pickFiles, pickFolder, getFileInfo, copyToClipboard, getThumbnail, getFullImage } from "$lib/api/bridge";
+  import { pickFiles, pickFolder, getFileInfo, copyToClipboard, getThumbnail, getFullImage, showInExplorer } from "$lib/api/bridge";
 
   import { isImage } from "$lib/utils/file-utils";
 
@@ -37,10 +37,12 @@
 
   // Lightbox for full-size image preview
   let lightboxSrc = $state<string | null>(null);
+  let lightboxPath = $state("");
   let lightboxName = $state("");
   let lightboxLoading = $state(false);
 
   async function openLightbox(path: string, name: string) {
+    lightboxPath = path;
     lightboxName = name;
     lightboxLoading = true;
     lightboxSrc = thumbCache[path] ?? null; // Show thumbnail immediately while loading
@@ -51,6 +53,7 @@
 
   function closeLightbox() {
     lightboxSrc = null;
+    lightboxPath = "";
     lightboxName = "";
     lightboxLoading = false;
   }
@@ -350,16 +353,19 @@
               </div>
             {/if}
 
-            <!-- File attachments -->
+            <!-- File attachments (click to open in Explorer) -->
             {#if files.length > 0}
               <div class="att-files">
                 {#each files as file}
-                  <div class="att-file">
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div class="att-file" onclick={(e) => { e.stopPropagation(); showInExplorer(file.path); }} title="Open in folder">
                     <Icon name="insert_drive_file" size={18} />
                     <div class="att-file-info">
                       <span class="att-file-name">{file.name}</span>
                       {#if file.size}<span class="att-file-size">{file.size}</span>{/if}
                     </div>
+                    <span class="att-file-open"><Icon name="folder_open" size={14} /></span>
                   </div>
                 {/each}
               </div>
@@ -485,11 +491,18 @@
     <div class="lightbox" onclick={closeLightbox}>
       <div class="lightbox-header">
         <span class="lightbox-name">{lightboxName}</span>
-        <button class="lightbox-close" onclick={closeLightbox}>
-          <Icon name="close" size={20} />
-        </button>
+        <div class="lightbox-actions">
+          <button class="lightbox-btn" onclick={(e) => { e.stopPropagation(); showInExplorer(lightboxPath); }} title="Open in folder">
+            <Icon name="folder_open" size={18} />
+          </button>
+          <button class="lightbox-close" onclick={closeLightbox}>
+            <Icon name="close" size={20} />
+          </button>
+        </div>
       </div>
-      <img src={lightboxSrc} alt={lightboxName} class="lightbox-img" class:lightbox-img-loading={lightboxLoading} />
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <img src={lightboxSrc} alt={lightboxName} class="lightbox-img" class:lightbox-img-loading={lightboxLoading} onclick={(e) => e.stopPropagation()} />
       {#if lightboxLoading}
         <span class="lightbox-loading">Loading full image...</span>
       {/if}
@@ -669,10 +682,17 @@
   .att-grid .att-img { aspect-ratio: 1; max-height: none; }
 
   .att-files { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
-  .att-file { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent); }
-  .att-file-info { display: flex; flex-direction: column; min-width: 0; }
+  .att-file {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px;
+    background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
+    cursor: pointer; transition: background 0.15s ease;
+  }
+  .att-file:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent); }
+  .att-file-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
   .att-file-name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .att-file-size { font-size: 10px; opacity: 0.5; }
+  .att-file-open { opacity: 0; transition: opacity 0.15s ease; color: var(--md-sys-color-primary); flex-shrink: 0; }
+  .att-file:hover .att-file-open { opacity: 0.7; }
 
   /* ── Empty State ── */
   .chat-empty {
@@ -891,8 +911,16 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
   }
-  .lightbox-close {
+  .lightbox-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .lightbox-btn, .lightbox-close {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -904,8 +932,9 @@
     color: #fff;
     cursor: pointer;
     flex-shrink: 0;
+    transition: background 0.15s ease;
   }
-  .lightbox-close:hover {
+  .lightbox-btn:hover, .lightbox-close:hover {
     background: rgba(255,255,255,0.25);
   }
   .lightbox-img {
