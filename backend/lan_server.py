@@ -721,6 +721,7 @@ class LANPeer:
     def _recv_batch(self, conn: socket.socket, count: int) -> None:
         """Receive a batch of files/directories."""
         received_files: list[dict] = []
+        top_dirs: list[str] = []
 
         while True:
             msg = _recv_msg(conn)
@@ -736,6 +737,9 @@ class LANPeer:
                     dir_path = os.path.normpath(os.path.join(out_dir, dir_name))
                     if dir_path.startswith(os.path.normpath(out_dir)):
                         os.makedirs(dir_path, exist_ok=True)
+                    # Track top-level directories (no path separator = top-level)
+                    if dir_name and os.sep not in dir_name and "/" not in dir_name:
+                        top_dirs.append(dir_name)
                 case "file":
                     out_path = self._recv_file(conn, msg)
                     name = os.path.basename(msg.get("name", "unnamed"))
@@ -747,9 +751,13 @@ class LANPeer:
                     })
 
         if received_files:
-            names = [f["name"] for f in received_files]
+            # Show folder names instead of every individual file
+            if top_dirs:
+                display_names = top_dirs
+            else:
+                display_names = [f["name"] for f in received_files]
             self._on_event("lan_files_received", {
-                "files": names,
+                "files": display_names,
                 "file_details": received_files,
             })
 
@@ -757,12 +765,14 @@ class LANPeer:
         """Send periodic pings to detect dead connections."""
         while self._running and self._connected:
             time.sleep(PING_INTERVAL)
-            with self._conn_lock:
-                if not self._conn or not self._connected:
+            # Acquire send_lock so pings don't interfere with file transfers
+            with self._send_lock:
+                with self._conn_lock:
+                    if not self._conn or not self._connected:
+                        break
+                    conn = self._conn
+                try:
+                    _send_msg(conn, {"type": "ping"})
+                except Exception:
+                    self._handle_disconnect(conn)
                     break
-                conn = self._conn
-            try:
-                _send_msg(conn, {"type": "ping"})
-            except Exception:
-                self._handle_disconnect(conn)
-                break
