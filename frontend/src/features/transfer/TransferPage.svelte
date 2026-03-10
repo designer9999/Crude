@@ -1,6 +1,6 @@
 <!--
   Main transfer view — Claude-style chat layout
-  Chat fills the space, activity/log are collapsible below
+  Chat fills the space
 -->
 <script lang="ts">
   import { getAppState } from "$lib/state/app-state.svelte";
@@ -8,8 +8,6 @@
   import Card from "$lib/ui/Card.svelte";
   import Button from "$lib/ui/Button.svelte";
   import UnifiedSendArea from "./UnifiedSendArea.svelte";
-  import ActivityLog from "./ActivityLog.svelte";
-  import LogPanel from "../LogPanel.svelte";
 
   interface Props {
     onsnackbar?: (msg: string) => void;
@@ -47,30 +45,3 @@
 
 <!-- Chat area — fills available space -->
 <UnifiedSendArea contactName={contact?.name} {onsnackbar} {onsend} {onsendtext} />
-
-<!-- LAN status indicator -->
-{#if contact}
-  <div class="lan-status">
-    {#if app.lanConnected}
-      <span class="text-primary flex items-center gap-1">
-        <Icon name="bolt" size={12} />
-        LAN direct — {app.lanPeerIp}
-      </span>
-    {:else}
-      <span class="flex items-center gap-1 text-on-surface-variant">
-        <Icon name="sync" size={12} />
-        Searching LAN...
-      </span>
-    {/if}
-  </div>
-{/if}
-
-<style>
-  .lan-status {
-    display: flex;
-    justify-content: center;
-    padding: 2px 8px;
-    font-size: 10px;
-    flex-shrink: 0;
-  }
-</style>

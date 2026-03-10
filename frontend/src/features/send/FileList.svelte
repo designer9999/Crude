@@ -30,16 +30,19 @@
 
   // Cache for base64 thumbnails keyed by file path
   let thumbCache = $state<Record<string, string>>({});
+  const _loading = new Set<string>();
 
-  // Load thumbnails for image files
+  function loadThumb(path: string) {
+    if (thumbCache[path] || _loading.has(path)) return;
+    _loading.add(path);
+    getThumbnail(path).then(uri => {
+      _loading.delete(path);
+      if (uri) thumbCache = { ...thumbCache, [path]: uri };
+    }).catch(() => _loading.delete(path));
+  }
+
   $effect(() => {
-    for (const file of images) {
-      if (!thumbCache[file.path]) {
-        getThumbnail(file.path).then(uri => {
-          if (uri) thumbCache = { ...thumbCache, [file.path]: uri };
-        });
-      }
-    }
+    for (const file of images) loadThumb(file.path);
   });
 
   const images = $derived(app.files.filter(f => f.info && isImage(f.info.type)));

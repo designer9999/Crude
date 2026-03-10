@@ -16,8 +16,9 @@
     return IMAGE_EXTS.has(ext);
   }
 
-  // Cache for base64 image thumbnails
+  // Cache for base64 image thumbnails ("loading" = in progress, string = data URI)
   let thumbCache = $state<Record<string, string>>({});
+  const _thumbLoading = new Set<string>(); // non-reactive loading tracker
 
   interface Props {
     contactName?: string;
@@ -114,26 +115,26 @@
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
-  // Load thumbnails for image attachments + selected files
+  // Load thumbnails lazily — one at a time to avoid IPC flood
+  function loadThumb(path: string) {
+    if (thumbCache[path] || _thumbLoading.has(path)) return;
+    _thumbLoading.add(path);
+    getThumbnail(path).then(uri => {
+      _thumbLoading.delete(path);
+      if (uri) thumbCache = { ...thumbCache, [path]: uri };
+    }).catch(() => _thumbLoading.delete(path));
+  }
+
+  // Trigger loading for visible images
   $effect(() => {
-    // Chat message images
     for (const msg of displayMessages) {
       if (!msg.attachments) continue;
       for (const att of msg.attachments) {
-        if (att.type === "image" && att.path && !thumbCache[att.path]) {
-          getThumbnail(att.path).then(uri => {
-            if (uri) thumbCache = { ...thumbCache, [att.path]: uri };
-          });
-        }
+        if (att.type === "image" && att.path) loadThumb(att.path);
       }
     }
-    // Selected file thumbnails
     for (const file of app.files) {
-      if (file.info && isImage(file.info.type) && !thumbCache[file.path]) {
-        getThumbnail(file.path).then(uri => {
-          if (uri) thumbCache = { ...thumbCache, [file.path]: uri };
-        });
-      }
+      if (file.info && isImage(file.info.type)) loadThumb(file.path);
     }
   });
 
@@ -623,7 +624,8 @@
   .att-img-placeholder {
     display: flex; align-items: center; justify-content: center;
     width: 100%; min-height: 80px;
-    color: var(--md-sys-color-on-surface-variant); opacity: 0.4;
+    color: var(--md-sys-color-on-surface-variant);
+    animation: shimmer 1.5s ease-in-out infinite alternate;
   }
   .att-grid .att-img { aspect-ratio: 1; max-height: none; }
 
@@ -671,6 +673,11 @@
   .att-thumb-placeholder {
     width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
     color: var(--md-sys-color-on-surface-variant); opacity: 0.4;
+    animation: shimmer 1.5s ease-in-out infinite alternate;
+  }
+  @keyframes shimmer {
+    from { opacity: 0.2; }
+    to   { opacity: 0.5; }
   }
   .att-thumb-remove {
     position: absolute; top: 2px; right: 2px; width: 16px; height: 16px;

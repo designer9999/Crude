@@ -927,22 +927,62 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
 
     # ── Thumbnail API ──
 
-    def get_thumbnail(self, path: str, max_size: int = 200) -> str | None:
-        """Return a base64 data URI for an image file, or None."""
+    def get_thumbnail(self, path: str, max_px: int = 200) -> str | None:
+        """Return a small base64 data URI thumbnail for an image file.
+
+        Resizes large images to max_px using PIL if available, otherwise
+        reads raw file (capped at 500KB to avoid UI freeze).
+        SVG files are returned as-is (they're small).
+        """
         path = os.path.normpath(path)
         if not os.path.isfile(path):
             return None
         ext = os.path.splitext(path)[1].lower()
+
+        # SVG — return raw (usually tiny)
+        if ext == ".svg":
+            try:
+                size = os.path.getsize(path)
+                if size > 500_000:
+                    return None
+                with open(path, "rb") as f:
+                    data = f.read()
+                encoded = base64.b64encode(data).decode("ascii")
+                return f"data:image/svg+xml;base64,{encoded}"
+            except Exception:
+                return None
+
         mime = mimetypes.guess_type(path)[0]
         if not mime or not mime.startswith("image/"):
-            # SVG special case
-            if ext == ".svg":
-                mime = "image/svg+xml"
-            else:
-                return None
+            return None
+
+        # Try PIL resize for fast, small thumbnails
         try:
+            from PIL import Image
+            import io
+
+            img = Image.open(path)
+            img.thumbnail((max_px, max_px), Image.LANCZOS)
+            if img.mode in ("RGBA", "P"):
+                buf_fmt, out_mime = "PNG", "image/png"
+            else:
+                buf_fmt, out_mime = "JPEG", "image/jpeg"
+            buf = io.BytesIO()
+            img.save(buf, format=buf_fmt, quality=75, optimize=True)
+            encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+            return f"data:{out_mime};base64,{encoded}"
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug("PIL thumbnail failed for %s: %s", path, e)
+
+        # Fallback: raw file but ONLY if small (< 500KB)
+        try:
+            size = os.path.getsize(path)
+            if size > 500_000:
+                return None  # Too large without resize — skip
             with open(path, "rb") as f:
-                data = f.read(10 * 1024 * 1024)  # Max 10MB
+                data = f.read()
             encoded = base64.b64encode(data).decode("ascii")
             return f"data:{mime};base64,{encoded}"
         except Exception as e:

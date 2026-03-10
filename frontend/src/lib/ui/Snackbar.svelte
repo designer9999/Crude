@@ -1,5 +1,6 @@
 <!--
-  M3 Snackbar — inverseSurface, auto-dismiss 4s
+  Compact inline notification — text bar at bottom, not a floating popup.
+  Auto-dismiss 3s. Slides in from below.
 -->
 <script lang="ts">
   interface Props {
@@ -10,65 +11,48 @@
 
   let { message = "", visible = $bindable(false), ondismiss }: Props = $props();
 
-  let exiting = $state(false);
-
   $effect(() => {
     if (visible) {
-      const timer = setTimeout(() => { exiting = true; }, 4000);
+      const timer = setTimeout(() => { visible = false; ondismiss?.(); }, 3000);
       return () => clearTimeout(timer);
     }
   });
-
-  function handleAnimationEnd() {
-    if (exiting) {
-      exiting = false;
-      visible = false;
-      ondismiss?.();
-    }
-  }
 </script>
 
 {#if visible}
-  <div
-    class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50
-           flex items-center gap-2 px-6 py-3.5 rounded-sm
-           bg-inverse-surface text-inverse-on-surface
-           shadow-level3 text-sm w-fit max-w-[90%]"
-    class:snackbar-enter={!exiting}
-    class:snackbar-exit={exiting}
-    onanimationend={handleAnimationEnd}
-    role="status"
-    aria-live="polite"
-  >
-    {message}
+  <div class="toast-bar" role="status" aria-live="polite">
+    <span class="toast-text">{message}</span>
   </div>
 {/if}
 
 <style>
-  .snackbar-enter {
-    animation:
-      snackbar-slide-in var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial) both,
-      snackbar-fade-in var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects) both;
+  .toast-bar {
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: 99px;
+    background: var(--md-sys-color-inverse-surface);
+    color: var(--md-sys-color-inverse-on-surface);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    max-width: 90%;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    animation: toast-in 0.2s ease both;
+    pointer-events: none;
   }
-  .snackbar-exit {
-    animation:
-      snackbar-slide-out var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial) forwards,
-      snackbar-fade-out var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects) forwards;
+  .toast-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  @keyframes snackbar-slide-in {
-    from { transform: translateX(-50%) translateY(100%); }
-    to   { transform: translateX(-50%) translateY(0); }
-  }
-  @keyframes snackbar-fade-in {
-    from { opacity: 0; }
-    to   { opacity: 1; }
-  }
-  @keyframes snackbar-slide-out {
-    from { transform: translateX(-50%) translateY(0); }
-    to   { transform: translateX(-50%) translateY(100%); }
-  }
-  @keyframes snackbar-fade-out {
-    from { opacity: 1; }
-    to   { opacity: 0; }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
   }
 </style>
