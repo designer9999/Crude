@@ -6,6 +6,8 @@ interface ThemeConfig {
   seedColor: string;
   variant: SchemeVariant;
   isDark: boolean;
+  mica: boolean;
+  micaOpacity: number;
 }
 
 function loadConfig(): ThemeConfig {
@@ -13,7 +15,7 @@ function loadConfig(): ThemeConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return { seedColor: "#6750A4", variant: "expressive", isDark: true };
+  return { seedColor: "#6750A4", variant: "expressive", isDark: true, mica: false, micaOpacity: 70 };
 }
 
 function saveConfig(cfg: ThemeConfig) {
@@ -28,10 +30,12 @@ class ThemeState {
   seedColor = $state(cached.seedColor);
   variant = $state<SchemeVariant>(cached.variant);
   isDark = $state(cached.isDark);
+  mica = $state(cached.mica);
+  micaOpacity = $state(cached.micaOpacity ?? 70);
   tokens: M3ColorTokens = $derived(generateColorTokens(this.seedColor, this.variant, this.isDark));
 
   persist() {
-    saveConfig({ seedColor: this.seedColor, variant: this.variant, isDark: this.isDark });
+    saveConfig({ seedColor: this.seedColor, variant: this.variant, isDark: this.isDark, mica: this.mica, micaOpacity: this.micaOpacity });
   }
 }
 

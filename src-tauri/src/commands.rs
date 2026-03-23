@@ -41,6 +41,13 @@ pub async fn start_lan(
 }
 
 #[tauri::command]
+pub async fn set_out_folder(folder: String, state: State<'_, LanState>) -> Result<(), String> {
+    let peer = state.peer.lock().await;
+    peer.set_out_folder(&folder).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn stop_lan(state: State<'_, LanState>) -> Result<(), String> {
     let peer = state.peer.lock().await;
     peer.stop().await;
@@ -314,6 +321,29 @@ fn get_local_ip_inner() -> String {
     }
 
     "unknown".to_string()
+}
+
+#[tauri::command]
+pub async fn set_mica(handle: tauri::AppHandle, enabled: bool, opacity: Option<u32>) -> Result<(), String> {
+    let _ = opacity; // Opacity is now controlled via CSS
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::Manager;
+        let window = handle.get_webview_window("main").ok_or("No main window")?;
+        if enabled {
+            // Minimal tint — let CSS control the darkness
+            let tint: window_vibrancy::Color = (0, 0, 0, 1);
+            if window_vibrancy::apply_acrylic(&window, Some(tint)).is_err() {
+                let _ = window_vibrancy::apply_mica(&window, Some(true));
+            }
+        } else {
+            let _ = window_vibrancy::clear_acrylic(&window);
+            let _ = window_vibrancy::clear_mica(&window);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { let _ = (handle, enabled); }
+    Ok(())
 }
 
 fn format_size(bytes: u64) -> String {

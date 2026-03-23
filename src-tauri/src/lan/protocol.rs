@@ -18,8 +18,4 @@ pub enum Message {
     Batch { count: u32 },
     #[serde(rename = "done")]
     Done,
-    #[serde(rename = "ping")]
-    Ping,
-    #[serde(rename = "pong")]
-    Pong,
 }

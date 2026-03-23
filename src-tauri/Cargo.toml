@@ -28,3 +28,4 @@ directories = "5"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
 clipboard-win = "5"
+window-vibrancy = "0.5"

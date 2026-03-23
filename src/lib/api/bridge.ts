@@ -26,6 +26,10 @@ export async function startLAN(code: string, outFolder: string): Promise<void> {
   return invoke("start_lan", { code, outFolder });
 }
 
+export async function setOutFolder(folder: string): Promise<void> {
+  return invoke("set_out_folder", { folder });
+}
+
 export async function stopLAN(): Promise<void> {
   return invoke("stop_lan");
 }
@@ -108,15 +112,19 @@ export async function readFilePreview(path: string, maxLines?: number): Promise<
   return invoke<FilePreview>("read_file_preview", { path, maxLines });
 }
 
+export async function setMica(enabled: boolean, opacity?: number): Promise<void> {
+  return invoke("set_mica", { enabled, opacity: opacity ?? 70 });
+}
+
 // Event listeners
 export type UnlistenFn = () => void;
 
-export async function onLanConnected(cb: (peerIp: string) => void): Promise<UnlistenFn> {
-  return listen<{ peer_ip: string }>("lan_connected", (e) => cb(e.payload.peer_ip));
+export async function onLanPeerAvailable(cb: (peerIp: string) => void): Promise<UnlistenFn> {
+  return listen<{ peer_ip: string }>("lan_peer_available", (e) => cb(e.payload.peer_ip));
 }
 
-export async function onLanDisconnected(cb: () => void): Promise<UnlistenFn> {
-  return listen("lan_disconnected", () => cb());
+export async function onLanPeerUnavailable(cb: () => void): Promise<UnlistenFn> {
+  return listen("lan_peer_unavailable", () => cb());
 }
 
 export async function onLanTextReceived(cb: (text: string) => void): Promise<UnlistenFn> {

@@ -8,9 +8,10 @@
   import { applyThemeToDOM } from "$lib/theme/apply-theme";
   import { getAppState } from "$lib/state/app-state.svelte";
   import type { MessageAttachment } from "$lib/state/app-state.svelte";
-  import { getStatus, startLAN, stopLAN, lanSendText, lanSendFiles, onLanConnected, onLanDisconnected, onLanTextReceived, onLanFilesReceived, onTransferProgress, windowMinimize, windowToggleMaximize, windowClose, windowStartDrag } from "$lib/api/bridge";
+  import { getStatus, startLAN, stopLAN, setOutFolder, lanSendText, lanSendFiles, onLanPeerAvailable, onLanPeerUnavailable, onLanTextReceived, onLanFilesReceived, onTransferProgress, windowMinimize, windowToggleMaximize, windowClose, windowStartDrag, setMica } from "$lib/api/bridge";
   import type { TransferProgress } from "$lib/api/bridge";
   import { isImage as fileIsImage, fileSizeStr } from "$lib/utils/file-utils";
+  import { playReceiveSound } from "$lib/utils/notification-sound";
 
   import Icon from "$lib/ui/Icon.svelte";
   import IconButton from "$lib/ui/IconButton.svelte";
@@ -63,21 +64,34 @@
     }
   });
 
+  // Sync out folder to backend when settings change (without restarting connection)
+  $effect(() => {
+    const folder = app.effectiveOutFolder;
+    setOutFolder(folder);
+  });
+
   onMount(async () => {
     const status = await getStatus();
     app.localIp = status.local_ip ?? "unknown";
     if (status.app_version) appVersion = status.app_version;
 
+    // Restore mica if enabled
+    if (theme.mica) {
+      setMica(true, theme.micaOpacity);
+      document.documentElement.style.background = "transparent";
+      document.body.classList.add("mica-active");
+    }
+
     const unlisteners = await Promise.all([
-      onLanConnected((peerIp) => {
+      onLanPeerAvailable((peerIp) => {
         app.lanConnected = true;
         app.lanPeerIp = peerIp;
-        app.addLog("success", `LAN connected to ${peerIp}`);
+        app.addLog("success", `LAN peer available: ${peerIp}`);
       }),
-      onLanDisconnected(() => {
+      onLanPeerUnavailable(() => {
         app.lanConnected = false;
         app.lanPeerIp = null;
-        app.addLog("warn", "LAN peer disconnected");
+        app.addLog("warn", "LAN peer unavailable");
       }),
       onLanTextReceived((text) => {
         const peer = app.activePeer;
@@ -85,6 +99,7 @@
           app.addMessage({ peerId: peer.id, direction: "received", text });
           app.addActivity({ peerId: peer.id, direction: "received", type: "text", items: [], success: true });
         }
+        if (app.notificationsEnabled) playReceiveSound();
         showSnackbar("Message received!");
       }),
       onLanFilesReceived((files, details) => {
@@ -99,6 +114,7 @@
             app.addMessage({ peerId: peer.id, direction: "received", text: "", attachments });
           }
         }
+        if (app.notificationsEnabled) playReceiveSound();
         showSnackbar(files.length > 0 ? `Received ${files.join(", ")}` : "Files received!");
       }),
       onTransferProgress((progress) => {
@@ -162,34 +178,23 @@
     return Math.round((done / transferProgress.total_bytes) * 100);
   });
 
-  function handleTitlebarDrag(e: MouseEvent) {
+  function handleTitlebarMouseDown(e: MouseEvent) {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
-    // Only skip actual interactive elements, not empty background areas
-    if (target.closest("button, input, a, [role='button'], .peer-chip, .titlebar-controls")) return;
-    e.preventDefault();
-    windowStartDrag();
-  }
-
-  function handleTitlebarDblClick(e: MouseEvent) {
-    const target = e.target as HTMLElement;
-    if (target.closest("button, input, a, [role='button'], .peer-chip, .titlebar-controls")) return;
-    windowToggleMaximize();
+    if (target.closest("button, input, a, [role='button'], .peer-chip")) return;
+    if (e.detail === 2) {
+      windowToggleMaximize();
+    } else {
+      windowStartDrag();
+    }
   }
 </script>
 
-<div class="app-shell">
+<div class="app-shell" class:mica-on={theme.mica} style:--mica-opacity={theme.mica ? (0.05 + theme.micaOpacity * 0.75 / 100) : 1}>
   <!-- Custom title bar -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="titlebar" onmousedown={handleTitlebarDrag} ondblclick={handleTitlebarDblClick}>
+  <div class="titlebar" onmousedown={handleTitlebarMouseDown}>
     <div class="titlebar-content">
-      <div class="top-bar-brand">
-        <div class="brand-icon">
-          <Icon name="swap_horiz" size={16} />
-        </div>
-        <span class="brand-name">LanDrop</span>
-      </div>
-
       {#if app.activeView === "transfer"}
         <div class="peer-strip">
           <PeerBar onadd={openAddPeer} onedit={openEditPeer} />
@@ -210,15 +215,15 @@
     </div>
 
     <div class="titlebar-controls">
-      <button class="titlebar-btn" onclick={windowMinimize} title="Minimize">
-        <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
-      </button>
-      <button class="titlebar-btn" onclick={windowToggleMaximize} title="Maximize">
-        <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>
-      </button>
-      <button class="titlebar-btn titlebar-btn-close" onclick={windowClose} title="Close">
-        <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1.2"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1.2"/></svg>
-      </button>
+      <IconButton title="Minimize" onclick={windowMinimize}>
+        <Icon name="remove" size={20} />
+      </IconButton>
+      <IconButton title="Maximize" onclick={windowToggleMaximize}>
+        <Icon name="crop_square" size={18} />
+      </IconButton>
+      <IconButton title="Close" onclick={windowClose}>
+        <Icon name="close" size={20} />
+      </IconButton>
     </div>
   </div>
 
@@ -252,23 +257,6 @@
     </div>
   {/if}
 
-  <!-- Status Bar -->
-  <footer class="status-bar">
-    <div class="status-indicator" class:status-connected={app.lanConnected} class:status-searching={!app.lanConnected && !!app.activePeer}>
-      <span class="status-dot"></span>
-    </div>
-    <span class="status-text">
-      {app.lanConnected ? "Connected" : app.activePeer ? "Searching..." : "No peer selected"}
-    </span>
-    {#if app.lanConnected}
-      <span class="status-badge">
-        <Icon name="bolt" size={10} />
-        LAN
-      </span>
-    {/if}
-    <span class="flex-1"></span>
-    <span class="status-ip">{app.localIp}</span>
-  </footer>
 </div>
 
 <PeerDialog
@@ -302,60 +290,17 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 8px 4px 8px 12px;
+    padding: 8px 4px 8px 8px;
     flex: 1;
     min-width: 0;
     min-height: 48px;
   }
   .titlebar-controls {
     display: flex;
-    align-items: stretch;
+    align-items: center;
     flex-shrink: 0;
-  }
-  .titlebar-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 46px;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    color: var(--md-sys-color-on-surface-variant);
-    transition: background 0.15s ease, color 0.15s ease;
-  }
-  .titlebar-btn:hover {
-    background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
-  }
-  .titlebar-btn-close:hover {
-    background: #e81123;
-    color: #fff;
-  }
-  .top-bar-brand {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-    margin-right: 4px;
-  }
-  .brand-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-    background: var(--md-sys-color-primary);
-    color: var(--md-sys-color-on-primary);
-  }
-  .brand-name {
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: -0.2px;
-    color: var(--md-sys-color-on-surface);
-    display: none; /* Hide on narrow widths */
-  }
-  @media (min-width: 480px) {
-    .brand-name { display: inline; }
+    gap: 2px;
+    padding-right: 4px;
   }
   .peer-strip {
     flex: 1;
@@ -403,65 +348,35 @@
     font-size: 11px;
   }
 
-  /* ── Status Bar ── */
-  .status-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 16px;
-    height: 32px;
-    background: var(--md-sys-color-surface-container);
-    border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline-variant) 50%, transparent);
-    font-size: 11px;
-    color: var(--md-sys-color-on-surface-variant);
+
+  /* ── Mica mode — transparent backgrounds ── */
+  :global(body.mica-active) {
+    background: transparent !important;
   }
-  .status-indicator {
-    position: relative;
-    width: 8px;
-    height: 8px;
+  .app-shell.mica-on {
+    background: rgba(0, 0, 0, var(--mica-opacity, 0.7));
   }
-  .status-dot {
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    background: var(--md-sys-color-outline);
-    transition: background 300ms ease;
+  .mica-on .titlebar {
+    background: transparent;
   }
-  .status-connected .status-dot {
-    background: var(--md-sys-color-primary);
-    box-shadow: 0 0 6px color-mix(in srgb, var(--md-sys-color-primary) 60%, transparent);
-    animation: pulse-glow 2s ease-in-out infinite;
+  .mica-on :global(.composer) {
+    background: rgba(0, 0, 0, 0.15) !important;
   }
-  .status-searching .status-dot {
-    background: var(--md-sys-color-tertiary);
-    animation: pulse-search 1.5s ease-in-out infinite;
+  .mica-on :global(.composer-box) {
+    background: rgba(255, 255, 255, 0.06) !important;
   }
-  @keyframes pulse-glow {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+  .mica-on :global(.chat-toolbar) {
+    background: transparent;
   }
-  @keyframes pulse-search {
-    0%, 100% { opacity: 0.3; transform: scale(0.8); }
-    50% { opacity: 1; transform: scale(1); }
+  /* Cards & settings become semi-transparent under mica */
+  .mica-on .settings-scroll {
+    background: transparent;
   }
-  .status-text {
-    font-weight: 500;
+  .mica-on :global(.bg-surface-container-low) {
+    background: rgba(255, 255, 255, 0.06) !important;
+    backdrop-filter: blur(4px);
   }
-  .status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--md-sys-color-primary) 15%, transparent);
-    color: var(--md-sys-color-primary);
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-  }
-  .status-ip {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    opacity: 0.6;
+  .mica-on :global(.shadow-level1) {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3) !important;
   }
 </style>

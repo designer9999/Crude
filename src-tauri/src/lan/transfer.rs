@@ -1,13 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::Mutex;
+use tokio::time;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
-use super::protocol::{Message, CHUNK_SIZE};
+use super::protocol::{Message, CHUNK_SIZE, TCP_PORT};
 
 pub struct Connection {
     reader: Mutex<OwnedReadHalf>,
@@ -83,16 +86,10 @@ impl Connection {
         r.read_exact(buf).await.map_err(|e| e.to_string())?;
         Ok(())
     }
-
-    /// Acquire the writer lock for the caller. Used by send_files to hold
-    /// the lock across message + raw data to prevent protocol interleaving.
-    pub async fn lock_writer(&self) -> tokio::sync::MutexGuard<'_, OwnedWriteHalf> {
-        self.writer.lock().await
-    }
 }
 
 /// Write a framed message directly to a writer (caller already holds the lock)
-async fn write_message(w: &mut OwnedWriteHalf, msg: &Message) -> Result<(), String> {
+async fn write_message(w: &mut tokio::net::tcp::OwnedWriteHalf, msg: &Message) -> Result<(), String> {
     let json = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
     let len = (json.len() as u32).to_be_bytes();
     w.write_all(&len).await.map_err(|e| e.to_string())?;
@@ -100,7 +97,35 @@ async fn write_message(w: &mut OwnedWriteHalf, msg: &Message) -> Result<(), Stri
     Ok(())
 }
 
-pub async fn send_files(conn: &Connection, paths: &[String], handle: Option<&AppHandle>) -> Result<(), String> {
+// ─── On-demand send functions ───
+
+/// Open a TCP connection to peer, authenticate, send text, close.
+pub async fn send_text_to_peer(
+    peer_ip: &str,
+    code_hash: &[u8],
+    text: &str,
+) -> Result<(), String> {
+    let addr: SocketAddr = format!("{}:{}", peer_ip, TCP_PORT)
+        .parse()
+        .map_err(|e: std::net::AddrParseError| e.to_string())?;
+
+    let stream = time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
+        .await
+        .map_err(|_| "Connection timeout".to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let conn = Connection::from_outgoing(stream, code_hash).await?;
+    conn.send_message(&Message::Text { text: text.to_string() }).await?;
+    Ok(())
+}
+
+/// Open a TCP connection to peer, authenticate, send files, close.
+pub async fn send_files_to_peer(
+    peer_ip: &str,
+    code_hash: &[u8],
+    paths: &[String],
+    handle: Option<&AppHandle>,
+) -> Result<(), String> {
     // Collect all files to send (skip symlinks for security)
     let mut file_entries: Vec<(String, PathBuf)> = Vec::new();
 
@@ -156,6 +181,18 @@ pub async fn send_files(conn: &Connection, paths: &[String], handle: Option<&App
     };
     let total_files = file_entries.len();
 
+    // Connect to peer
+    let addr: SocketAddr = format!("{}:{}", peer_ip, TCP_PORT)
+        .parse()
+        .map_err(|e: std::net::AddrParseError| e.to_string())?;
+
+    let stream = time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
+        .await
+        .map_err(|_| "Connection timeout".to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let conn = Connection::from_outgoing(stream, code_hash).await?;
+
     if let Some(h) = handle {
         let _ = h.emit("lan_transfer_progress", serde_json::json!({
             "direction": "send",
@@ -167,9 +204,8 @@ pub async fn send_files(conn: &Connection, paths: &[String], handle: Option<&App
         }));
     }
 
-    // *** HOLD THE WRITER LOCK FOR THE ENTIRE TRANSFER ***
-    // This prevents ping/pong from interleaving with file data
-    let mut w = conn.lock_writer().await;
+    // Use writer lock for atomic sends (no interleaving with concurrent operations)
+    let mut w = conn.writer.lock().await;
 
     // Send batch header if multiple files
     if file_entries.len() > 1 {
@@ -189,7 +225,7 @@ pub async fn send_files(conn: &Connection, paths: &[String], handle: Option<&App
             write_message(&mut w, &Message::Dir { name: dir_part.to_string() }).await?;
         }
 
-        // Send file header + raw data atomically (no interleaving possible)
+        // Send file header + raw data
         write_message(&mut w, &Message::File { name: name.clone(), size }).await?;
 
         let mut file = tokio::fs::File::open(file_path).await.map_err(|e| e.to_string())?;
@@ -219,7 +255,6 @@ pub async fn send_files(conn: &Connection, paths: &[String], handle: Option<&App
             }
         }
 
-        // Flush after each file
         w.flush().await.map_err(|e| e.to_string())?;
         sent_files += 1;
     }
@@ -230,7 +265,6 @@ pub async fn send_files(conn: &Connection, paths: &[String], handle: Option<&App
         w.flush().await.map_err(|e| e.to_string())?;
     }
 
-    // Drop the writer lock — pings can resume
     drop(w);
 
     if let Some(h) = handle {
@@ -246,6 +280,8 @@ pub async fn send_files(conn: &Connection, paths: &[String], handle: Option<&App
 
     Ok(())
 }
+
+// ─── Receive functions (called by incoming TCP handler) ───
 
 pub async fn receive_file(conn: &Connection, name: &str, size: u64, out_folder: &str, handle: Option<&AppHandle>) -> Result<String, String> {
     let safe_name = sanitize_path(name);
@@ -277,6 +313,9 @@ pub async fn receive_file(conn: &Connection, name: &str, size: u64, out_folder: 
     if let Some(parent) = out_path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
+
+    // Auto-rename to avoid overwriting: file.txt → file (1).txt → file (2).txt
+    let out_path = deduplicate_path(out_path);
 
     let mut file = tokio::fs::File::create(&out_path).await.map_err(|e| e.to_string())?;
     let mut remaining = size;
@@ -361,6 +400,8 @@ pub async fn receive_batch(conn: &Connection, count: u32, out_folder: &str, hand
     Ok(files)
 }
 
+// ─── Utility functions ───
+
 fn sanitize_path(name: &str) -> String {
     let cleaned = name
         .replace('\\', "/")
@@ -436,6 +477,28 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
+}
+
+/// Windows-style deduplication: file.txt → file (1).txt → file (2).txt
+fn deduplicate_path(path: PathBuf) -> PathBuf {
+    if !path.exists() {
+        return path;
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let ext = path.extension().and_then(|e| e.to_str());
+    let parent = path.parent().unwrap_or(Path::new("."));
+
+    for i in 1..=9999 {
+        let new_name = match ext {
+            Some(e) => format!("{} ({}).{}", stem, i, e),
+            None => format!("{} ({})", stem, i),
+        };
+        let candidate = parent.join(&new_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path
 }
 
 fn dirs_next_downloads() -> String {

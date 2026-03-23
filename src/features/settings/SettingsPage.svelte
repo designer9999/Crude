@@ -6,8 +6,10 @@
   import Icon from "$lib/ui/Icon.svelte";
   import Switch from "$lib/ui/Switch.svelte";
   import Button from "$lib/ui/Button.svelte";
+  import Slider from "$lib/ui/Slider.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { pickSaveFolder, copyToClipboard } from "$lib/api/bridge";
+  import { pickSaveFolder, copyToClipboard, setMica } from "$lib/api/bridge";
+  import { playReceiveSound } from "$lib/utils/notification-sound";
   import { getThemeState } from "$lib/theme/theme-store.svelte";
   import { VARIANT_INFO, PRESET_COLORS, type SchemeVariant } from "$lib/theme/m3-color";
 
@@ -55,6 +57,25 @@
     theme.persist();
   }
 
+  function toggleMica(checked: boolean) {
+    theme.mica = checked;
+    theme.persist();
+    setMica(checked, theme.micaOpacity);
+    document.documentElement.style.background = checked ? "transparent" : "";
+    if (checked) {
+      document.body.classList.add("mica-active");
+    } else {
+      document.body.classList.remove("mica-active");
+    }
+  }
+
+  let opacityTimer: ReturnType<typeof setTimeout>;
+  function onOpacityChange(val: number) {
+    theme.micaOpacity = val;
+    clearTimeout(opacityTimer);
+    opacityTimer = setTimeout(() => theme.persist(), 500);
+  }
+
   $effect(() => {
     if (debugOpen && app.logs.length && debugEl) {
       requestAnimationFrame(() => {
@@ -67,7 +88,7 @@
 <div class="flex flex-col gap-4">
 
   <!-- Theme -->
-  <Card variant="outlined">
+  <Card variant="elevated">
     <button
       class="w-full flex items-center gap-2 text-on-surface text-sm font-medium
              cursor-pointer border-none bg-transparent p-0 -my-0.5"
@@ -85,14 +106,40 @@
       <div class="flex flex-col gap-6 mt-4 section-enter">
 
         <!-- Dark / Light toggle -->
-        <div class="theme-row">
+        <div class="theme-row" class:opacity-40={theme.mica}>
           <Icon name="light_mode" size={20} />
-          <Switch checked={theme.isDark} onchange={toggleDark} />
+          <Switch checked={theme.isDark} disabled={theme.mica} onchange={toggleDark} />
           <Icon name="dark_mode" size={20} />
           <span class="text-xs text-on-surface-variant">
-            {theme.isDark ? "Dark" : "Light"} mode
+            {theme.mica ? "Dark mode (required for transparency)" : theme.isDark ? "Dark mode" : "Light mode"}
           </span>
         </div>
+
+        <!-- Mica / transparent background (Windows 11) -->
+        <div class="flex items-center justify-between py-1">
+          <div>
+            <div class="text-sm text-on-surface">Transparency</div>
+            <div class="text-xs text-on-surface-variant">Blurred translucent background</div>
+          </div>
+          <Switch checked={theme.mica} onchange={toggleMica} />
+        </div>
+
+        {#if theme.mica}
+          <div class="opacity-slider">
+            <div class="opacity-labels">
+              <span>Clear</span>
+              <span>{theme.micaOpacity}%</span>
+              <span>Opaque</span>
+            </div>
+            <Slider
+              min={0}
+              max={100}
+              step={1}
+              bind:value={theme.micaOpacity}
+              oninput={onOpacityChange}
+            />
+          </div>
+        {/if}
 
         <!-- Seed Color -->
         <section>
@@ -149,7 +196,7 @@
   </Card>
 
   <!-- Receive defaults -->
-  <Card variant="outlined">
+  <Card variant="elevated">
     <button
       class="w-full flex items-center gap-2 text-on-surface text-sm font-medium
              cursor-pointer border-none bg-transparent p-0 -my-0.5"
@@ -180,7 +227,7 @@
               </button>
             </div>
           {:else}
-            <Button variant="outlined" full onclick={async () => {
+            <Button variant="elevated" full onclick={async () => {
               const f = await pickSaveFolder();
               if (f) app.updateReceiveOption("outFolder", f);
             }}>
@@ -190,16 +237,15 @@
           {/if}
         </div>
 
-        <div class="flex items-center justify-between py-1">
-          <div><div class="text-sm text-on-surface">Overwrite files</div><div class="text-xs text-on-surface-variant">Replace existing files without asking</div></div>
-          <Switch checked={app.receiveOptions.overwrite ?? false} onchange={(v) => app.updateReceiveOption("overwrite", v || undefined)} />
+        <div class="text-xs text-on-surface-variant mt-1">
+          Files with the same name are automatically renamed
         </div>
       </div>
     {/if}
   </Card>
 
   <!-- Notifications -->
-  <Card variant="outlined">
+  <Card variant="elevated">
     <div class="flex items-center gap-2 text-on-surface text-sm font-medium">
       <span class="text-primary"><Icon name="notifications" size={20} /></span>
       Notifications
@@ -209,12 +255,12 @@
         <div class="text-sm text-on-surface">Notification sounds</div>
         <div class="text-xs text-on-surface-variant">Play sound when files or messages arrive</div>
       </div>
-      <Switch checked={app.notificationsEnabled} onchange={(v) => app.setNotifications(v)} />
+      <Switch checked={app.notificationsEnabled} onchange={(v) => { app.setNotifications(v); if (v) playReceiveSound(); }} />
     </div>
   </Card>
 
   <!-- About -->
-  <Card variant="filled">
+  <Card variant="elevated">
     <button
       class="w-full flex items-center gap-2 text-on-surface text-sm font-medium
              cursor-pointer border-none bg-transparent p-0"
@@ -231,8 +277,8 @@
     {#if aboutOpen}
       <div class="flex flex-col gap-3 mt-4 section-enter">
         <div class="flex items-center gap-3 p-4 rounded-xl bg-surface-container">
-          <div class="flex items-center justify-center w-10 h-10 rounded-lg bg-primary">
-            <span class="text-on-primary" style="font-size: 18px;"><Icon name="swap_horiz" size={20} /></span>
+          <div class="flex items-center justify-center w-10 h-10 rounded-lg bg-primary text-on-primary">
+            <Icon name="swap_horiz" size={20} />
           </div>
           <div class="flex-1">
             <div class="text-sm text-on-surface font-medium">LanDrop v{appVersion}</div>
@@ -254,7 +300,7 @@
   </Card>
 
   <!-- Debug Log -->
-  <Card variant="outlined">
+  <Card variant="elevated">
     <button
       class="w-full flex items-center gap-2 text-on-surface text-sm font-medium
              cursor-pointer border-none bg-transparent p-0 -my-0.5"
@@ -295,11 +341,11 @@
           {/if}
         </div>
         <div class="flex gap-2">
-          <Button variant="outlined" onclick={() => app.clearLogs()}>
+          <Button variant="elevated" onclick={() => app.clearLogs()}>
             <Icon name="delete_sweep" size={16} />
             Clear log
           </Button>
-          <Button variant="outlined" onclick={async () => {
+          <Button variant="elevated" onclick={async () => {
             const text = app.logs.map(l => `[${l.time}] ${l.level.toUpperCase()} ${l.text}`).join("\n");
             await copyToClipboard(text);
             onsnackbar?.("Log copied to clipboard");
@@ -446,6 +492,19 @@
     font-size: 10px;
     opacity: 0.7;
     margin-top: 2px;
+  }
+
+  .opacity-slider {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .opacity-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--md-sys-color-on-surface-variant);
+    opacity: 0.7;
   }
 
   /* ── Debug log ── */

@@ -12,11 +12,13 @@ pub fn run() {
             // Store app handle for LAN events
             let handle = app.handle().clone();
             app.manage(lan::LanState::new(handle));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::start_lan,
+            commands::set_out_folder,
             commands::stop_lan,
             commands::lan_send_text,
             commands::lan_send_files,
@@ -27,6 +29,7 @@ pub fn run() {
             commands::save_clipboard_image,
             commands::get_clipboard_files,
             commands::read_file_preview,
+            commands::set_mica,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LanDrop");

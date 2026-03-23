@@ -65,9 +65,14 @@
     lightboxName = name;
     lightboxLoading = true;
     lightboxSrc = thumbCache[path] ?? null;
-    const full = await getFullImage(path, 800);
-    lightboxLoading = false;
-    if (full) lightboxSrc = full;
+    try {
+      const full = await getFullImage(path, 800);
+      if (full) lightboxSrc = full;
+    } catch {
+      // Keep thumbnail as fallback
+    } finally {
+      lightboxLoading = false;
+    }
   }
 
   function closeLightbox() {
@@ -149,12 +154,21 @@
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
+  const MAX_THUMB_CACHE = 200;
+
   function loadThumb(path: string) {
     if (path in thumbCache || _thumbLoading.has(path)) return;
     _thumbLoading.add(path);
     getThumbnail(path).then(uri => {
       _thumbLoading.delete(path);
-      thumbCache = { ...thumbCache, [path]: uri ?? "" };
+      const keys = Object.keys(thumbCache);
+      if (keys.length >= MAX_THUMB_CACHE) {
+        const pruned = { ...thumbCache };
+        for (const k of keys.slice(0, keys.length - MAX_THUMB_CACHE + 1)) delete pruned[k];
+        thumbCache = { ...pruned, [path]: uri ?? "" };
+      } else {
+        thumbCache = { ...thumbCache, [path]: uri ?? "" };
+      }
     }).catch(() => {
       _thumbLoading.delete(path);
       thumbCache = { ...thumbCache, [path]: "" };
