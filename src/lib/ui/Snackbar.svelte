@@ -44,7 +44,7 @@
     white-space: nowrap;
     max-width: 90%;
     box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-    animation: toast-in 0.2s ease both;
+    animation: toast-in var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial) both;
     pointer-events: none;
   }
   .toast-text {

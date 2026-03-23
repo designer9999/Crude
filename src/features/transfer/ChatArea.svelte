@@ -569,8 +569,16 @@
 
   {#if dragOver}
     <div class="drag-overlay">
-      <Icon name="upload_file" size={40} />
-      <span>Drop files here</span>
+      <div class="drop-border"></div>
+      <div class="drop-content">
+        <div class="drop-icon-ring">
+          <div class="drop-icon">
+            <Icon name="upload_file" size={32} />
+          </div>
+        </div>
+        <span class="drop-title">Drop files here</span>
+        <span class="drop-subtitle">Files will be sent to your peer</span>
+      </div>
     </div>
   {/if}
 
@@ -755,12 +763,12 @@
     background: var(--md-sys-color-on-surface);
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.15s ease;
+    transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
   }
   .bubble:hover::after { opacity: 0.05; }
   .bubble:active::after { opacity: 0.08; }
 
-  .bubble-copied { animation: bubble-flash 0.2s ease; }
+  .bubble-copied { animation: bubble-flash var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects); }
   @keyframes bubble-flash { from { opacity: 0.7; } to { opacity: 1; } }
 
   .bubble-contact { font-size: 10px; font-weight: 500; color: var(--md-sys-color-primary); margin-bottom: 1px; }
@@ -784,7 +792,7 @@
   .star-btn {
     display: flex; align-items: center; background: transparent; border: none;
     cursor: pointer; padding: 0; color: var(--md-sys-color-outline); opacity: 0;
-    transition: opacity 0.15s ease, color 0.15s ease;
+    transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects), color var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
   }
   .star-btn.starred { opacity: 1; color: var(--md-sys-color-primary); }
   .bubble:hover .star-btn { opacity: 0.7; }
@@ -798,7 +806,7 @@
     display: flex; align-items: center; justify-content: center;
     width: 100%; min-height: 80px;
     color: var(--md-sys-color-on-surface-variant);
-    animation: shimmer 1.5s ease-in-out infinite alternate;
+    animation: shimmer 1.5s cubic-bezier(0.2, 0.0, 0, 1.0) infinite alternate;
   }
   .att-grid .att-img { aspect-ratio: 1; max-height: none; }
 
@@ -813,7 +821,7 @@
     border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
     background: color-mix(in srgb, var(--md-sys-color-on-surface) 4%, transparent);
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: background var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
   }
   .att-file-card:hover {
     background: color-mix(in srgb, var(--md-sys-color-on-surface) 10%, transparent);
@@ -939,7 +947,7 @@
     background: var(--md-sys-color-on-surface);
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.15s ease;
+    transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
   }
   .composer-img:hover::after { opacity: 0.08; }
 
@@ -968,7 +976,7 @@
       color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent) 50%,
       transparent 100%
     );
-    animation: shimmer-slide 1.5s ease-in-out infinite;
+    animation: shimmer-slide 1.5s cubic-bezier(0.2, 0.0, 0, 1.0) infinite;
   }
   @keyframes shimmer-slide {
     0% { transform: translateX(-100%); }
@@ -990,7 +998,7 @@
     justify-content: center;
     cursor: pointer;
     opacity: 0;
-    transition: opacity 0.15s ease;
+    transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
     padding: 0;
     z-index: 1;
   }
@@ -1008,7 +1016,7 @@
     background: color-mix(in srgb, var(--md-sys-color-on-surface) 4%, transparent);
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.15s ease;
+    transition: background var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
   }
   .composer-file-card:hover {
     background: color-mix(in srgb, var(--md-sys-color-on-surface) 10%, transparent);
@@ -1042,7 +1050,7 @@
     justify-content: center;
     cursor: pointer;
     opacity: 0;
-    transition: opacity 0.15s ease;
+    transition: opacity var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
     padding: 0;
     z-index: 1;
   }
@@ -1193,21 +1201,83 @@
     inset: 0;
     z-index: 20;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface) 88%);
-    color: var(--md-sys-color-primary);
-    font-size: 14px;
-    font-weight: 500;
-    border-radius: 12px;
+    background: color-mix(in srgb, var(--md-sys-color-surface) 92%, transparent);
+    backdrop-filter: blur(8px);
     pointer-events: none;
-    animation: overlay-in 0.15s ease both;
+    /* M3: expressive default effects — 200ms */
+    animation: overlay-fade 200ms cubic-bezier(0.34, 0.80, 0.34, 1.00) both;
   }
-  @keyframes overlay-in {
+  @keyframes overlay-fade {
     from { opacity: 0; }
     to { opacity: 1; }
+  }
+  .drop-border {
+    position: absolute;
+    inset: 16px;
+    border: 2px dashed var(--md-sys-color-primary);
+    border-radius: 24px;
+    opacity: 0.5;
+    /* M3: expressive default spatial — 500ms */
+    animation: border-draw 500ms cubic-bezier(0.38, 1.21, 0.22, 1.00) both;
+  }
+  @keyframes border-draw {
+    from { inset: 40px; opacity: 0; border-radius: 40px; }
+    to { inset: 16px; opacity: 0.5; border-radius: 24px; }
+  }
+  .drop-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    /* M3: expressive fast spatial — 350ms, staggered 100ms */
+    animation: content-up 350ms cubic-bezier(0.42, 1.67, 0.21, 0.90) 100ms both;
+  }
+  @keyframes content-up {
+    from { opacity: 0; transform: translateY(16px) scale(0.9); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .drop-icon-ring {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent);
+    /* M3: standard easing for continuous ambient loop */
+    animation: ring-pulse 1.5s cubic-bezier(0.2, 0.0, 0, 1.0) infinite;
+  }
+  @keyframes ring-pulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 color-mix(in srgb, var(--md-sys-color-primary) 20%, transparent); }
+    50% { transform: scale(1.05); box-shadow: 0 0 0 12px color-mix(in srgb, var(--md-sys-color-primary) 0%, transparent); }
+  }
+  .drop-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+    /* M3: expressive fast spatial — 350ms, staggered 200ms for icon entrance */
+    animation: icon-enter 350ms cubic-bezier(0.42, 1.67, 0.21, 0.90) 200ms both;
+  }
+  @keyframes icon-enter {
+    from { transform: scale(0); }
+    to { transform: scale(1); }
+  }
+  .drop-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--md-sys-color-on-surface);
+    letter-spacing: 0.15px;
+  }
+  .drop-subtitle {
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
   }
 
   .clear-menu {
@@ -1221,7 +1291,7 @@
     padding: 4px 0;
     min-width: 200px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    animation: menu-in 0.15s ease both;
+    animation: menu-in var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial) both;
   }
   @keyframes menu-in {
     from { opacity: 0; transform: translateY(-4px); }
@@ -1231,7 +1301,7 @@
     display: block; width: 100%; text-align: left;
     padding: 8px 12px; background: transparent; border: none;
     color: var(--md-sys-color-on-surface); font-size: 12px;
-    cursor: pointer; transition: background 0.15s ease;
+    cursor: pointer; transition: background var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
   }
   .clear-menu button:hover {
     background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
@@ -1246,7 +1316,7 @@
     align-items: center;
     justify-content: center;
     background: rgba(0, 0, 0, 0.85);
-    animation: overlay-in 0.15s ease both;
+    animation: overlay-in var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects) both;
     cursor: pointer;
   }
   .lightbox-header {
@@ -1287,7 +1357,7 @@
     color: #fff;
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.15s ease;
+    transition: background var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
   }
   .lightbox-btn:hover, .lightbox-close:hover {
     background: rgba(255,255,255,0.25);
@@ -1298,7 +1368,7 @@
     object-fit: contain;
     border-radius: 8px;
     cursor: default;
-    transition: opacity 0.2s ease;
+    transition: opacity var(--md-spring-default-effects-dur) var(--md-spring-default-effects);
   }
   .lightbox-img-loading {
     opacity: 0.5;
@@ -1319,7 +1389,7 @@
     align-items: center;
     justify-content: center;
     background: rgba(0, 0, 0, 0.7);
-    animation: overlay-in 0.15s ease both;
+    animation: overlay-in var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects) both;
     cursor: pointer;
   }
   .file-preview-modal {
@@ -1334,7 +1404,7 @@
     box-shadow: 0 8px 32px rgba(0,0,0,0.4);
     cursor: default;
     overflow: hidden;
-    animation: dialog-scale-in 0.2s ease both;
+    animation: dialog-scale-in var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial) both;
   }
   @keyframes dialog-scale-in {
     from { transform: scale(0.95); opacity: 0; }

@@ -185,7 +185,7 @@
     height: 44px;
     border-radius: 2px;
     background: var(--md-sys-color-primary);
-    transition: width 150ms ease, height 150ms ease, border-radius 150ms ease;
+    transition: width var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial), height var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial), border-radius var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial);
   }
   .handle-pressed {
     width: 2px;

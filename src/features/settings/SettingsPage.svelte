@@ -362,6 +362,9 @@
 
 <style>
   .section-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     transition: transform var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial);
   }
   .section-arrow-open {
@@ -450,7 +453,7 @@
     border: 2px solid transparent;
     background: var(--swatch-color);
     cursor: pointer;
-    transition: transform 0.15s ease, border-color 0.15s ease;
+    transition: transform var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial), border-color var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
   }
   .preset-swatch:hover {
     transform: scale(1.15);
@@ -473,7 +476,7 @@
     border: 1px solid var(--md-sys-color-outline-variant);
     background: var(--md-sys-color-surface-container-high);
     color: var(--md-sys-color-on-surface-variant);
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition: background var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects), border-color var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
   }
   .variant-card:hover {
     background: var(--md-sys-color-surface-container-highest);

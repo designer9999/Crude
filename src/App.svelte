@@ -331,7 +331,7 @@
     position: absolute;
     inset: 0;
     background: color-mix(in srgb, var(--md-sys-color-primary) 15%, transparent);
-    transition: width 200ms ease-out;
+    transition: width var(--md-spring-default-effects-dur) var(--md-spring-default-effects);
   }
   .progress-bar-content {
     position: relative;
