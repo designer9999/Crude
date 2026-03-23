@@ -1,5 +1,6 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::Mutex;
@@ -9,9 +10,13 @@ use tauri::{AppHandle, Emitter};
 use super::protocol::{BEACON_MAGIC, BEACON_PORT, TCP_PORT};
 use super::transfer::Connection;
 
+/// How long without a beacon before we consider the peer gone.
+/// 30s with 2s beacon interval = 15 missed beacons — tolerant of UDP loss and transfer bursts.
+const STALE_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub async fn run_discovery(
     handle: AppHandle,
-    running: Arc<Mutex<bool>>,
+    running: Arc<AtomicBool>,
     peer_last_seen: Arc<Mutex<Option<(String, Instant)>>>,
     code_hash: Arc<Mutex<Vec<u8>>>,
     out_folder: Arc<Mutex<String>>,
@@ -48,7 +53,7 @@ pub async fn run_discovery(
         let mut interval = time::interval(Duration::from_secs(2));
         loop {
             interval.tick().await;
-            if !*running_send.lock().await {
+            if !running_send.load(Ordering::Relaxed) {
                 break;
             }
             let hash = code_hash_send.lock().await.clone();
@@ -80,7 +85,7 @@ pub async fn run_discovery(
     let beacon_listener = tokio::spawn(async move {
         let mut buf = [0u8; 128];
         loop {
-            if !*running_recv.lock().await {
+            if !running_recv.load(Ordering::Relaxed) {
                 break;
             }
             let recv = time::timeout(Duration::from_secs(1), udp_listen.recv_from(&mut buf)).await;
@@ -126,12 +131,12 @@ pub async fn run_discovery(
         let mut interval = time::interval(Duration::from_secs(5));
         loop {
             interval.tick().await;
-            if !*running_avail.lock().await {
+            if !running_avail.load(Ordering::Relaxed) {
                 break;
             }
             let mut guard = peer_last_seen_avail.lock().await;
             if let Some((_, last_seen)) = guard.as_ref() {
-                if last_seen.elapsed() > Duration::from_secs(10) {
+                if last_seen.elapsed() > STALE_TIMEOUT {
                     *guard = None;
                     drop(guard);
                     let _ = handle_avail.emit("lan_peer_unavailable", serde_json::json!({}));
@@ -145,22 +150,41 @@ pub async fn run_discovery(
     let code_hash_tcp = code_hash.clone();
     let handle_tcp = handle.clone();
     let out_folder_tcp = out_folder.clone();
+    let peer_last_seen_tcp = peer_last_seen.clone();
     let tcp_acceptor = tokio::spawn(async move {
         loop {
-            if !*running_tcp.lock().await {
+            if !running_tcp.load(Ordering::Relaxed) {
                 break;
             }
             let accept = time::timeout(Duration::from_secs(1), tcp_listener.accept()).await;
-            if let Ok(Ok((stream, _addr))) = accept {
+            if let Ok(Ok((stream, addr))) = accept {
                 let hash = code_hash_tcp.lock().await.clone();
                 let handle_session = handle_tcp.clone();
                 let folder = out_folder_tcp.lock().await.clone();
+                let peer_ls = peer_last_seen_tcp.clone();
 
                 // Spawn a task per incoming session — non-blocking
                 tokio::spawn(async move {
+                    let peer_ip = addr.ip().to_string();
+                    // A successful incoming TCP connection proves peer is alive
+                    {
+                        let mut guard = peer_ls.lock().await;
+                        let was_available = guard.is_some();
+                        *guard = Some((peer_ip.clone(), Instant::now()));
+                        drop(guard);
+                        if !was_available {
+                            let _ = handle_session.emit(
+                                "lan_peer_available",
+                                serde_json::json!({"peer_ip": &peer_ip}),
+                            );
+                        }
+                    }
                     if let Err(e) = handle_incoming_session(stream, &hash, &folder, &handle_session).await {
                         eprintln!("Incoming session error: {}", e);
                     }
+                    // Refresh after transfer completes too
+                    let mut guard = peer_ls.lock().await;
+                    *guard = Some((peer_ip, Instant::now()));
                 });
             }
         }

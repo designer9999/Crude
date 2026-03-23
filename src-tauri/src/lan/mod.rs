@@ -3,14 +3,15 @@ pub mod protocol;
 pub mod transfer;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tauri::AppHandle;
 
 pub struct LanPeer {
     pub handle: AppHandle,
-    running: Arc<Mutex<bool>>,
-    /// (peer_ip, last_seen_time) — updated by beacon listener
+    running: Arc<AtomicBool>,
+    /// (peer_ip, last_seen_time) — updated by beacon listener and successful transfers
     peer_last_seen: Arc<Mutex<Option<(String, Instant)>>>,
     code_hash: Arc<Mutex<Vec<u8>>>,
     out_folder: Arc<Mutex<String>>,
@@ -20,7 +21,7 @@ impl LanPeer {
     pub fn new(handle: AppHandle) -> Self {
         Self {
             handle,
-            running: Arc::new(Mutex::new(false)),
+            running: Arc::new(AtomicBool::new(false)),
             peer_last_seen: Arc::new(Mutex::new(None)),
             code_hash: Arc::new(Mutex::new(Vec::new())),
             out_folder: Arc::new(Mutex::new(String::new())),
@@ -30,8 +31,7 @@ impl LanPeer {
     pub async fn start(&self, code: &str, out_folder: &str) -> Result<(), String> {
         use sha2::{Sha256, Digest};
 
-        let mut running = self.running.lock().await;
-        if *running {
+        if self.running.load(Ordering::SeqCst) {
             return Ok(());
         }
 
@@ -40,8 +40,7 @@ impl LanPeer {
         *self.out_folder.lock().await = out_folder.to_string();
         // Clear stale peer info
         *self.peer_last_seen.lock().await = None;
-        *running = true;
-        drop(running);
+        self.running.store(true, Ordering::SeqCst);
 
         let handle = self.handle.clone();
         let running = self.running.clone();
@@ -62,10 +61,7 @@ impl LanPeer {
     }
 
     pub async fn stop(&self) {
-        let mut running = self.running.lock().await;
-        *running = false;
-        drop(running);
-
+        self.running.store(false, Ordering::SeqCst);
         *self.peer_last_seen.lock().await = None;
     }
 
@@ -77,6 +73,9 @@ impl LanPeer {
         if let Some(ip) = peer_ip {
             let hash = self.code_hash.lock().await.clone();
             transfer::send_text_to_peer(&ip, &hash, text).await?;
+            // Successful send proves peer is alive — refresh last_seen
+            let mut guard = self.peer_last_seen.lock().await;
+            *guard = Some((ip, Instant::now()));
             Ok(true)
         } else {
             Ok(false)
@@ -91,6 +90,9 @@ impl LanPeer {
         if let Some(ip) = peer_ip {
             let hash = self.code_hash.lock().await.clone();
             transfer::send_files_to_peer(&ip, &hash, paths, Some(&self.handle)).await?;
+            // Successful send proves peer is alive — refresh last_seen
+            let mut guard = self.peer_last_seen.lock().await;
+            *guard = Some((ip, Instant::now()));
             Ok(true)
         } else {
             Ok(false)
@@ -101,7 +103,7 @@ impl LanPeer {
     pub async fn is_connected(&self) -> bool {
         let guard = self.peer_last_seen.lock().await;
         if let Some((_, last_seen)) = guard.as_ref() {
-            last_seen.elapsed().as_secs() < 10
+            last_seen.elapsed().as_secs() < 30
         } else {
             false
         }

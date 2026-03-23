@@ -1,0 +1,19 @@
+node_modules/
+dist/
+src-tauri/target/
+m3 Expressive/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

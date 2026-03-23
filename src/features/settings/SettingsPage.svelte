@@ -7,6 +7,7 @@
   import Switch from "$lib/ui/Switch.svelte";
   import Button from "$lib/ui/Button.svelte";
   import Slider from "$lib/ui/Slider.svelte";
+  import TextField from "$lib/ui/TextField.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
   import { pickSaveFolder, copyToClipboard, setMica } from "$lib/api/bridge";
   import { playReceiveSound } from "$lib/utils/notification-sound";
@@ -271,6 +272,42 @@
       </div>
       <Switch checked={app.notificationsEnabled} onchange={(v) => { app.setNotifications(v); if (v) playReceiveSound(); }} />
     </div>
+    <div class="text-xs text-on-surface-variant mt-2 opacity-60">
+      Closing the window minimizes to system tray. Right-click the tray icon for options.
+    </div>
+  </Card>
+
+  <!-- Hotkeys -->
+  <Card variant="elevated">
+    <div class="flex items-center gap-2 text-on-surface text-sm font-medium">
+      <span class="text-primary"><Icon name="keyboard" size={20} /></span>
+      Global Hotkeys
+    </div>
+    <div class="flex items-center justify-between py-1 mt-3">
+      <div>
+        <div class="text-sm text-on-surface">Enable hotkeys</div>
+        <div class="text-xs text-on-surface-variant">System-wide shortcuts even when minimized</div>
+      </div>
+      <Switch checked={app.hotkeys.enabled} onchange={(v) => app.updateHotkeys({ enabled: v })} />
+    </div>
+    {#if app.hotkeys.enabled}
+      <div class="mt-3 flex items-center gap-3">
+        <div class="flex-1">
+          <TextField
+            label="Quick send shortcut"
+            value={app.hotkeys.quickSend}
+            placeholder="e.g. F3"
+            oninput={(e) => {
+              const val = (e.target as HTMLInputElement).value.toUpperCase();
+              app.updateHotkeys({ quickSend: val });
+            }}
+          />
+        </div>
+      </div>
+      <div class="text-xs text-on-surface-variant mt-1 opacity-70">
+        Press this key anywhere to open file picker and attach to current chat
+      </div>
+    {/if}
   </Card>
 
   <!-- About -->

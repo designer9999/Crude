@@ -8,7 +8,7 @@
   import { applyThemeToDOM } from "$lib/theme/apply-theme";
   import { getAppState } from "$lib/state/app-state.svelte";
   import type { MessageAttachment } from "$lib/state/app-state.svelte";
-  import { getStatus, startLAN, stopLAN, setOutFolder, lanSendText, lanSendFiles, onLanPeerAvailable, onLanPeerUnavailable, onLanTextReceived, onLanFilesReceived, onTransferProgress, windowMinimize, windowToggleMaximize, windowClose, windowStartDrag, setMica } from "$lib/api/bridge";
+  import { getStatus, startLAN, stopLAN, setOutFolder, lanSendText, lanSendFiles, onLanPeerAvailable, onLanPeerUnavailable, onLanTextReceived, onLanFilesReceived, onTransferProgress, windowMinimize, windowToggleMaximize, windowClose, windowStartDrag, windowShow, setMica, registerShortcut, unregisterShortcut, getFileInfo, getExplorerSelection, getClipboardFiles } from "$lib/api/bridge";
   import type { TransferProgress } from "$lib/api/bridge";
   import { isImage as fileIsImage, fileSizeStr } from "$lib/utils/file-utils";
   import { playReceiveSound } from "$lib/utils/notification-sound";
@@ -155,7 +155,45 @@
       app.setActivePeer(app.peers[0].id);
     }
 
+    // Register global hotkeys
+    await setupHotkeys();
+
     return () => { unlisteners.forEach(fn => fn()); };
+  });
+
+  // ── Global hotkeys ──
+  async function quickSendHandler() {
+    // 1. Try selected files in the active Explorer window
+    let paths = await getExplorerSelection().catch(() => [] as string[]);
+    // 2. Fall back to clipboard files (Ctrl+C'd files)
+    if (paths.length === 0) {
+      paths = await getClipboardFiles().catch(() => [] as string[]);
+    }
+    if (paths.length === 0) return;
+    for (const path of paths) {
+      const info = await getFileInfo(path);
+      app.addFile(path, info);
+    }
+    await windowShow();
+  }
+
+  async function setupHotkeys() {
+    if (!app.hotkeys.enabled) return;
+    try {
+      await registerShortcut(app.hotkeys.quickSend, quickSendHandler);
+    } catch (e) {
+      app.addLog("warn", `Hotkey registration failed: ${e}`);
+    }
+  }
+
+  // Re-register when hotkey settings change
+  $effect(() => {
+    const { quickSend, enabled } = app.hotkeys;
+    if (enabled) {
+      registerShortcut(quickSend, quickSendHandler).catch(() => {});
+    } else {
+      unregisterShortcut(quickSend).catch(() => {});
+    }
   });
 
   async function handleSendFiles() {

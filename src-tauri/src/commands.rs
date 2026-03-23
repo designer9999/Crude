@@ -346,6 +346,95 @@ pub async fn set_mica(handle: tauri::AppHandle, enabled: bool, opacity: Option<u
     Ok(())
 }
 
+/// Get currently selected files from the active Windows Explorer window via native COM.
+/// Uses IShellWindows → IWebBrowser2 → IShellBrowser → IFolderView2 → IShellItemArray.
+#[tauri::command]
+pub async fn get_explorer_selection() -> Result<Vec<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // COM shell objects require STA — run on a dedicated thread
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let result = explorer_selection_com();
+            let _ = tx.send(result);
+        });
+        rx.await.map_err(|_| "Thread join failed".to_string())?
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(vec![])
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn explorer_selection_com() -> Result<Vec<String>, String> {
+    use windows::core::Interface as _;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize,
+        IServiceProvider, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        IFolderView2, IShellBrowser, IShellItem, IShellItemArray,
+        IShellView, IShellWindows, IWebBrowser2, SID_STopLevelBrowser,
+        ShellWindows, SIGDN_FILESYSPATH,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        let result = (|| -> Result<Vec<String>, String> {
+            let shell_windows: IShellWindows =
+                CoCreateInstance(&ShellWindows, None, CLSCTX_ALL).map_err(|e| format!("{e}"))?;
+
+            let fg_hwnd = GetForegroundWindow();
+            let count = shell_windows.Count().map_err(|e| format!("{e}"))?;
+
+            for i in 0..count {
+                // Build VARIANT with VT_I4 for the index
+                let v = windows::Win32::System::Variant::VARIANT::from(i);
+
+                let Ok(disp) = shell_windows.Item(&v) else { continue };
+                let Ok(wb) = disp.cast::<IWebBrowser2>() else { continue };
+                let Ok(hwnd_val) = wb.HWND() else { continue };
+
+                let wnd = HWND(hwnd_val.0 as *mut _);
+                if wnd != fg_hwnd { continue; }
+
+                let sp: IServiceProvider = wb.cast().map_err(|e| format!("{e}"))?;
+                let sb: IShellBrowser = sp.QueryService(&SID_STopLevelBrowser).map_err(|e| format!("{e}"))?;
+                let sv: IShellView = sb.QueryActiveShellView().map_err(|e| format!("{e}"))?;
+                let fv: IFolderView2 = sv.cast().map_err(|e| format!("{e}"))?;
+                let selection: IShellItemArray = fv.GetSelection(false).map_err(|e| format!("{e}"))?;
+                let n = selection.GetCount().map_err(|e| format!("{e}"))?;
+
+                let mut paths = Vec::with_capacity(n as usize);
+                for j in 0..n {
+                    let item: IShellItem = match selection.GetItemAt(j) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let name_ptr: windows::core::PWSTR = match item.GetDisplayName(SIGDN_FILESYSPATH) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    if let Ok(s) = name_ptr.to_string() {
+                        if !s.is_empty() {
+                            paths.push(s);
+                        }
+                    }
+                }
+                return Ok(paths);
+            }
+            Ok(vec![])
+        })();
+
+        CoUninitialize();
+        result
+    }
+}
+
 fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{} B", bytes)

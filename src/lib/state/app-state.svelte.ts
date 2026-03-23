@@ -66,6 +66,14 @@ const MESSAGES_KEY = "landrop-messages";
 const ACTIVITY_KEY = "landrop-activity";
 const SETTINGS_KEY = "landrop-settings";
 const RECEIVE_KEY = "landrop-receive-options";
+const HOTKEYS_KEY = "landrop-hotkeys";
+
+export interface HotkeySettings {
+  quickSend: string;
+  enabled: boolean;
+}
+
+const DEFAULT_HOTKEYS: HotkeySettings = { quickSend: "F3", enabled: false };
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -142,6 +150,7 @@ class AppState {
   // Settings
   notificationsEnabled = $state<boolean>(loadJson<{ n: boolean }>(SETTINGS_KEY, { n: true }).n);
   receiveOptions = $state<ReceiveOptions>(loadJson(RECEIVE_KEY, {}));
+  hotkeys = $state<HotkeySettings>(loadJson(HOTKEYS_KEY, DEFAULT_HOTKEYS));
 
   // Derived
   get activePeer(): Peer | null {
@@ -314,6 +323,11 @@ class AppState {
   updateReceiveOption<K extends keyof ReceiveOptions>(key: K, value: ReceiveOptions[K]) {
     this.receiveOptions = { ...this.receiveOptions, [key]: value };
     saveJson(RECEIVE_KEY, this.receiveOptions);
+  }
+
+  updateHotkeys(updates: Partial<HotkeySettings>) {
+    this.hotkeys = { ...this.hotkeys, ...updates };
+    saveJson(HOTKEYS_KEY, this.hotkeys);
   }
 }
 

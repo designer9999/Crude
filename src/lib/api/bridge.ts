@@ -112,6 +112,10 @@ export async function readFilePreview(path: string, maxLines?: number): Promise<
   return invoke<FilePreview>("read_file_preview", { path, maxLines });
 }
 
+export async function getExplorerSelection(): Promise<string[]> {
+  return invoke<string[]>("get_explorer_selection");
+}
+
 export async function setMica(enabled: boolean, opacity?: number): Promise<void> {
   return invoke("set_mica", { enabled, opacity: opacity ?? 70 });
 }
@@ -175,5 +179,27 @@ export async function onDragDrop(
 // Window controls
 export async function windowMinimize() { await getCurrentWindow().minimize(); }
 export async function windowToggleMaximize() { await getCurrentWindow().toggleMaximize(); }
-export async function windowClose() { await getCurrentWindow().close(); }
+export async function windowClose() { await getCurrentWindow().hide(); }
 export async function windowStartDrag() { await getCurrentWindow().startDragging(); }
+export async function windowShow() {
+  const win = getCurrentWindow();
+  await win.show();
+  await win.unminimize();
+  await win.setFocus();
+}
+
+// Global shortcuts
+import { register, unregister, isRegistered } from "@tauri-apps/plugin-global-shortcut";
+
+export async function registerShortcut(shortcut: string, cb: () => void): Promise<void> {
+  const already = await isRegistered(shortcut);
+  if (already) await unregister(shortcut);
+  await register(shortcut, (event) => {
+    if (event.state === "Pressed") cb();
+  });
+}
+
+export async function unregisterShortcut(shortcut: string): Promise<void> {
+  const already = await isRegistered(shortcut);
+  if (already) await unregister(shortcut);
+}
