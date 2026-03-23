@@ -13,7 +13,12 @@ interface ThemeConfig {
 function loadConfig(): ThemeConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const cfg = JSON.parse(raw);
+      // Never allow mica in light mode
+      if (cfg.mica && !cfg.isDark) cfg.mica = false;
+      return cfg;
+    }
   } catch {}
   return { seedColor: "#6750A4", variant: "expressive", isDark: true, mica: false, micaOpacity: 70 };
 }

@@ -100,22 +100,51 @@
           app.addActivity({ peerId: peer.id, direction: "received", type: "text", items: [], success: true });
         }
         if (app.notificationsEnabled) playReceiveSound();
-        showSnackbar("Message received!");
       }),
       onLanFilesReceived((files, details) => {
         const peer = app.activePeer;
         if (peer) {
           app.addActivity({ peerId: peer.id, direction: "received", type: "files", items: files, success: true, outFolder: app.effectiveOutFolder });
           if (details.length > 0) {
-            const attachments: MessageAttachment[] = details.map(f => ({
-              name: f.name, path: f.path, size: fileSizeStr(f.size),
-              type: fileIsImage(f.name) ? "image" as const : "file" as const,
-            }));
+            // Group files that came from a folder (names like "folder/file.txt")
+            const folderFiles = new Map<string, typeof details>();
+            const looseFiles: typeof details = [];
+            for (const f of details) {
+              const slashIdx = f.name.indexOf("/");
+              if (slashIdx > 0) {
+                const folder = f.name.substring(0, slashIdx);
+                if (!folderFiles.has(folder)) folderFiles.set(folder, []);
+                folderFiles.get(folder)!.push(f);
+              } else {
+                looseFiles.push(f);
+              }
+            }
+
+            const attachments: MessageAttachment[] = [];
+            // Add folder attachments (single card per folder)
+            for (const [folder, folderDetails] of folderFiles) {
+              const totalSize = folderDetails.reduce((sum, f) => sum + f.size, 0);
+              // Use the parent directory path (strip the file name from the first file's path)
+              const folderPath = folderDetails[0].path.replace(/[\\/][^\\/]+$/, "");
+              attachments.push({
+                name: folder,
+                path: folderPath,
+                size: fileSizeStr(totalSize),
+                type: "folder" as const,
+                fileCount: folderDetails.length,
+              });
+            }
+            // Add loose files normally
+            for (const f of looseFiles) {
+              attachments.push({
+                name: f.name, path: f.path, size: fileSizeStr(f.size),
+                type: fileIsImage(f.name) ? "image" as const : "file" as const,
+              });
+            }
             app.addMessage({ peerId: peer.id, direction: "received", text: "", attachments });
           }
         }
         if (app.notificationsEnabled) playReceiveSound();
-        showSnackbar(files.length > 0 ? `Received ${files.join(", ")}` : "Files received!");
       }),
       onTransferProgress((progress) => {
         transferProgress = progress.phase === "done" ? null : progress;

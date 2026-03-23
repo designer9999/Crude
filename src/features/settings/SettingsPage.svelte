@@ -52,20 +52,33 @@
     theme.persist();
   }
 
+  function disableMica() {
+    theme.mica = false;
+    setMica(false, 0);
+    document.documentElement.style.background = "";
+    document.body.classList.remove("mica-active");
+  }
+
   function toggleDark(checked: boolean) {
     theme.isDark = checked;
+    // Force mica off when switching to light mode
+    if (!checked && theme.mica) {
+      disableMica();
+    }
     theme.persist();
   }
 
   function toggleMica(checked: boolean) {
+    // Never allow mica in light mode
+    if (checked && !theme.isDark) return;
     theme.mica = checked;
     theme.persist();
-    setMica(checked, theme.micaOpacity);
-    document.documentElement.style.background = checked ? "transparent" : "";
     if (checked) {
+      setMica(true, theme.micaOpacity);
+      document.documentElement.style.background = "transparent";
       document.body.classList.add("mica-active");
     } else {
-      document.body.classList.remove("mica-active");
+      disableMica();
     }
   }
 
@@ -75,6 +88,7 @@
     clearTimeout(opacityTimer);
     opacityTimer = setTimeout(() => theme.persist(), 500);
   }
+  $effect(() => () => clearTimeout(opacityTimer));
 
   $effect(() => {
     if (debugOpen && app.logs.length && debugEl) {

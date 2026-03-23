@@ -30,7 +30,8 @@ export interface MessageAttachment {
   name: string;
   path: string;
   size?: string;
-  type: "image" | "file";
+  type: "image" | "file" | "folder";
+  fileCount?: number;
 }
 
 export interface MessageEntry {
