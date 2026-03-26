@@ -146,25 +146,13 @@ export async function getFullImage(path: string, maxPx: number = 800): Promise<s
   return invoke<string | null>("get_thumbnail", { path, maxPx });
 }
 
-/** Get a playable video source URL */
+/** Get a playable video source URL (reads file → blob URL) */
 export async function getVideoSrc(path: string): Promise<string | null> {
-  if (isMobile()) {
-    return mobileVideoSrc(path);
-  }
-  try {
-    const { convertFileSrc } = await import("@tauri-apps/api/core");
-    return convertFileSrc(path);
-  } catch {
-    return null;
-  }
-}
-
-async function mobileVideoSrc(path: string): Promise<string | null> {
   try {
     const { readFile } = await import("@tauri-apps/plugin-fs");
     const data = await readFile(path);
     const ext = path.split(".").pop()?.toLowerCase() ?? "mp4";
-    const mime = ext === "webm" ? "video/webm" : ext === "mov" ? "video/quicktime" : "video/mp4";
+    const mime = ext === "webm" ? "video/webm" : ext === "mov" ? "video/quicktime" : ext === "mkv" ? "video/x-matroska" : "video/mp4";
     const blob = new Blob([data], { type: mime });
     return URL.createObjectURL(blob);
   } catch {
