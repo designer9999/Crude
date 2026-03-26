@@ -50,70 +50,34 @@ jobs:
           releaseDraft: false
           prerelease: false
 
-  build-android:
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r27
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
-          cache-on-failure: true
-          shared-key: "tauri-android"
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Build Android APK
-        run: npx tauri android build --target aarch64 --apk
-        env:
-          NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-
-      - name: Sign APK
-        run: |
-          APK_PATH=$(find src-tauri/gen/android -name "*.apk" -path "*/release/*" | head -1)
-          if [ -n "$APK_PATH" ]; then
-            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > keystore.jks
-            "${ANDROID_HOME}/build-tools/$(ls "${ANDROID_HOME}/build-tools/" | tail -1)/apksigner" sign \
-              --ks keystore.jks \
-              --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-              --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
-              "$APK_PATH"
-            mv "$APK_PATH" landrop-android-arm64.apk
-          fi
-
-      - name: Upload APK to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: landrop-android-arm64.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # Android build — uncomment when needed
+  # build-android:
+  #   permissions:
+  #     contents: write
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with: { node-version: "lts/*", cache: npm }
+  #     - uses: actions/setup-java@v4
+  #       with: { distribution: temurin, java-version: 17 }
+  #     - uses: android-actions/setup-android@v3
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with: { targets: aarch64-linux-android }
+  #     - uses: nttld/setup-ndk@v1
+  #       id: setup-ndk
+  #       with: { ndk-version: r27 }
+  #     - uses: swatinem/rust-cache@v2
+  #       with: { workspaces: "./src-tauri -> target", shared-key: "tauri-android" }
+  #     - run: npm ci
+  #     - run: npx tauri android build --target aarch64 --apk
+  #       env: { NDK_HOME: "${{ steps.setup-ndk.outputs.ndk-path }}" }
+  #     - name: Sign and upload APK
+  #       run: |
+  #         APK=$(find src-tauri/gen/android -name "*.apk" -path "*/release/*" | head -1)
+  #         echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > ks.jks
+  #         "${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools/ | tail -1)/apksigner" sign --ks ks.jks --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" "$APK"
+  #         mv "$APK" landrop-android-arm64.apk
+  #     - uses: softprops/action-gh-release@v2
+  #       with: { files: landrop-android-arm64.apk }
+  #       env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
