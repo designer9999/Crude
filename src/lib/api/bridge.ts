@@ -216,8 +216,8 @@ export async function getExplorerSelection(): Promise<string[]> {
   return invoke<string[]>("get_explorer_selection");
 }
 
-export async function setMica(enabled: boolean, opacity?: number): Promise<void> {
-  return invoke("set_mica", { enabled, opacity: opacity ?? 70 });
+export async function setMica(enabled: boolean): Promise<void> {
+  return invoke("set_mica", { enabled });
 }
 
 // ── Event listeners ──

@@ -116,7 +116,7 @@
 
   function disableMica() {
     theme.mica = false;
-    setMica(false, 0);
+    setMica(false);
     document.documentElement.style.background = "";
     document.body.classList.remove("mica-active");
   }
@@ -136,7 +136,7 @@
     theme.mica = checked;
     theme.persist();
     if (checked) {
-      setMica(true, theme.micaOpacity);
+      setMica(true);
       document.documentElement.style.background = "transparent";
       document.body.classList.add("mica-active");
     } else {

@@ -62,7 +62,7 @@
 
       // Restore mica if enabled
       if (theme.mica) {
-        setMica(true, theme.micaOpacity);
+        setMica(true);
         document.documentElement.style.background = "transparent";
         document.body.classList.add("mica-active");
       }

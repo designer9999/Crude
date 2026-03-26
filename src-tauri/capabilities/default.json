@@ -8,7 +8,7 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "shell:default",
-    "shell:allow-open",
+    "opener:default",
     "clipboard-manager:default",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-read-text",

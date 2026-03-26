@@ -106,12 +106,11 @@ impl LanService {
         *self.default_out_folder.lock().await = folder.to_string();
     }
 
-    pub async fn set_alias(&self, new_alias: &str) {
+    pub async fn set_alias(&mut self, new_alias: &str) {
         *self.alias.lock().await = new_alias.to_string();
-        // Persist to disk
-        let mut identity = self.identity.clone();
-        identity.alias = new_alias.to_string();
-        identity.save_alias(&self.data_dir);
+        // Update the identity in memory AND persist to disk
+        self.identity.alias = new_alias.to_string();
+        self.identity.save_alias(&self.data_dir);
     }
 
     pub fn get_identity(&self) -> &DeviceIdentity {

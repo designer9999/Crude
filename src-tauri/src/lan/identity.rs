@@ -40,10 +40,16 @@ impl DeviceIdentity {
             }
         };
 
+        let device_type = if cfg!(target_os = "android") {
+            "mobile"
+        } else {
+            "desktop"
+        }.to_string();
+
         Self {
             id,
             alias,
-            device_type: "desktop".to_string(),
+            device_type,
         }
     }
 

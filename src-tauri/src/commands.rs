@@ -25,7 +25,7 @@ pub async fn get_status() -> Result<StatusResponse, String> {
     let local_ip = get_local_ip_inner();
     Ok(StatusResponse {
         ok: true,
-        app_version: "1.0.0".to_string(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
         local_ip,
     })
 }
@@ -71,7 +71,7 @@ pub async fn set_peer_out_folder(peer_id: String, folder: String, state: State<'
 
 #[tauri::command]
 pub async fn set_device_alias(alias: String, state: State<'_, LanState>) -> Result<(), String> {
-    let service = state.service.lock().await;
+    let mut service = state.service.lock().await;
     service.set_alias(&alias).await;
     Ok(())
 }
@@ -156,7 +156,6 @@ pub async fn show_in_explorer(path: String) -> Result<bool, String> {
 #[tauri::command]
 pub async fn get_thumbnail(path: String, max_px: Option<u32>) -> Result<Option<String>, String> {
     let max = max_px.unwrap_or(120);
-    let path = path.clone();
 
     // Run image processing in blocking thread
     let result = tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
@@ -316,8 +315,7 @@ fn get_local_ip_inner() -> String {
 }
 
 #[tauri::command]
-pub async fn set_mica(handle: tauri::AppHandle, enabled: bool, opacity: Option<u32>) -> Result<(), String> {
-    let _ = opacity; // Opacity is now controlled via CSS
+pub async fn set_mica(handle: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use tauri::Manager;
@@ -433,9 +431,8 @@ fn explorer_selection_com() -> Result<Vec<String>, String> {
 /// Open a file with the system's default handler
 #[tauri::command]
 pub async fn open_file(path: String, app: tauri::AppHandle) -> Result<(), String> {
-    // Use tauri-plugin-shell to open files cross-platform (handles Android intents safely)
-    use tauri_plugin_shell::ShellExt;
-    app.shell().open(&path, None).map_err(|e| format!("open_file: {e}"))
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_path(&path, None::<&str>).map_err(|e| format!("open_file: {e}"))
 }
 
 /// Save raw bytes (from frontend file read) to a temp file for sending.
