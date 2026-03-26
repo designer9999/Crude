@@ -1,6 +1,6 @@
 {
   "productName": "LanDrop",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "identifier": "com.landrop.app",
   "build": {
     "frontendDist": "../dist",
@@ -25,7 +25,7 @@
       "csp": "default-src 'self'; img-src 'self' data: blob: asset: https://asset.localhost; media-src 'self' blob: asset: https://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; connect-src ipc: http://ipc.localhost",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**", "/storage/**", "$DOWNLOAD/**"]
+        "scope": ["**", "$DOWNLOAD/**", "$HOME/**", "$PICTURE/**", "$VIDEO/**", "$DESKTOP/**", "$DOCUMENT/**", "$TEMP/**", "/storage/**", "C:\\**", "D:\\**"]
       }
     }
   },
