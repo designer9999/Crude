@@ -33,7 +33,7 @@ export interface MessageAttachment {
   name: string;
   path: string;
   size?: string;
-  type: "image" | "file" | "folder";
+  type: "image" | "video" | "file" | "folder";
   fileCount?: number;
 }
 

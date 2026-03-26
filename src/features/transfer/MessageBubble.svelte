@@ -4,8 +4,9 @@
 <script lang="ts">
   import Icon from "$lib/ui/Icon.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { showInExplorer, openFile, downloadFile, isMobile } from "$lib/api/bridge";
+  import { showInExplorer, openFile, downloadFile, isMobile, getVideoSrc, revokeBlobUrl } from "$lib/api/bridge";
   import type { MessageEntry } from "$lib/state/app-state.svelte";
+  import { onDestroy } from "svelte";
 
   interface Props {
     msg: MessageEntry;
@@ -25,6 +26,64 @@
   const mobile = isMobile();
 
   let downloading = $state<Record<string, boolean>>({});
+  let videoUrls = $state<Record<string, string>>({});
+  let videoEls: Record<string, HTMLVideoElement> = {};
+  let videoProgress = $state<Record<string, number>>({});
+  let videoDuration = $state<Record<string, number>>({});
+  let videoMuted = $state<Record<string, boolean>>({});
+
+  onDestroy(() => {
+    for (const path of Object.keys(videoEls)) {
+      const el = videoEls[path];
+      if (el) { el.pause(); el.src = ""; }
+    }
+    for (const url of Object.values(videoUrls)) {
+      revokeBlobUrl(url);
+    }
+  });
+
+  // Resolve video asset URLs on mount
+  $effect(() => {
+    for (const att of msg.attachments ?? []) {
+      if (att.type === "video" && att.path && !(att.path in videoUrls)) {
+        getVideoSrc(att.path).then(url => {
+          if (url) videoUrls = { ...videoUrls, [att.path]: url };
+        });
+      }
+    }
+  });
+
+  function handleVideoEnter(path: string) {
+    const el = videoEls[path];
+    if (el) { el.muted = videoMuted[path] !== false; el.play().catch(() => {}); }
+  }
+  function handleVideoLeave(path: string) {
+    const el = videoEls[path];
+    if (el) { el.pause(); }
+  }
+  function handleVideoTimeUpdate(path: string) {
+    const el = videoEls[path];
+    if (el) videoProgress = { ...videoProgress, [path]: el.currentTime };
+  }
+  function handleVideoMeta(path: string) {
+    const el = videoEls[path];
+    if (el) videoDuration = { ...videoDuration, [path]: el.duration };
+  }
+  function toggleVideoMute(e: MouseEvent, path: string) {
+    e.stopPropagation();
+    const isMuted = videoMuted[path] !== false;
+    videoMuted = { ...videoMuted, [path]: !isMuted };
+    const el = videoEls[path];
+    if (el) el.muted = !isMuted;
+  }
+  function handleVideoSeek(e: MouseEvent, path: string) {
+    e.stopPropagation();
+    const bar = (e.currentTarget as HTMLElement);
+    const rect = bar.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const el = videoEls[path];
+    if (el && el.duration) el.currentTime = pct * el.duration;
+  }
 
   async function handleDownload(path: string, name: string) {
     if (downloading[path]) return;
@@ -42,7 +101,7 @@
 
   let isSent = $derived(msg.direction === "sent");
   let hasAttachments = $derived(msg.attachments && msg.attachments.length > 0);
-  let images = $derived(msg.attachments?.filter(a => a.type === "image") ?? []);
+  let media = $derived(msg.attachments?.filter(a => a.type === "image" || a.type === "video") ?? []);
   let files = $derived(msg.attachments?.filter(a => a.type === "file" || a.type === "folder") ?? []);
 
   function getPeerName(peerId: string): string {
@@ -79,20 +138,51 @@
       <div class="bubble-contact">{getPeerName(msg.peerId)}</div>
     {/if}
 
-    {#if images.length > 0}
-      <div class="att-images" class:att-grid={images.length > 1}>
-        {#each images as img}
+    {#if media.length > 0}
+      <div class="att-images" class:att-grid={media.length > 1}>
+        {#each media as item}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="att-img-wrap" onclick={(e) => { e.stopPropagation(); onlightbox(img.path, img.name); }}>
-            {#if thumbCache[img.path] && thumbCache[img.path] !== ""}
-              <img src={thumbCache[img.path]} alt={img.name} class="att-img" />
+          <div
+            class="att-img-wrap"
+            onclick={(e) => { e.stopPropagation(); onlightbox(item.path, item.name); }}
+            onmouseenter={() => item.type === "video" && handleVideoEnter(item.path)}
+            onmouseleave={() => item.type === "video" && handleVideoLeave(item.path)}
+          >
+            {#if item.type === "video"}
+              {#if videoUrls[item.path]}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video
+                  bind:this={videoEls[item.path]}
+                  src="{videoUrls[item.path]}#t=0.1"
+                  class="att-img"
+                  preload="metadata"
+                  muted
+                  loop
+                  playsinline
+                  ontimeupdate={() => handleVideoTimeUpdate(item.path)}
+                  onloadedmetadata={() => handleVideoMeta(item.path)}
+                ></video>
+                <div class="att-video-badge"><Icon name="play_arrow" size={16} /></div>
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="att-video-bar" onclick={(e) => handleVideoSeek(e, item.path)}>
+                  <div class="att-video-bar-fill" style="width: {videoDuration[item.path] ? (videoProgress[item.path] ?? 0) / videoDuration[item.path] * 100 : 0}%"></div>
+                </div>
+                <button class="att-video-mute" onclick={(e) => toggleVideoMute(e, item.path)}>
+                  <Icon name={videoMuted[item.path] !== false ? "volume_off" : "volume_up"} size={14} />
+                </button>
+              {:else}
+                <div class="att-img-placeholder"><Icon name="videocam" size={24} /></div>
+              {/if}
+            {:else if thumbCache[item.path] && thumbCache[item.path] !== ""}
+              <img src={thumbCache[item.path]} alt={item.name} class="att-img" />
             {:else}
               <div class="att-img-placeholder"><Icon name="image" size={24} /></div>
             {/if}
             {#if mobile && !isSent}
-              <button class="att-img-download" onclick={(e) => { e.stopPropagation(); handleDownload(img.path, img.name); }} title="Save" disabled={downloading[img.path]}>
-                <Icon name={downloading[img.path] ? "hourglass_empty" : "download"} size={16} />
+              <button class="att-img-download" onclick={(e) => { e.stopPropagation(); handleDownload(item.path, item.name); }} title="Save" disabled={downloading[item.path]}>
+                <Icon name={downloading[item.path] ? "hourglass_empty" : "download"} size={16} />
               </button>
             {/if}
           </div>
@@ -270,6 +360,65 @@
   }
   .att-img-download:active { background: rgba(0, 0, 0, 0.75); }
   .att-img-download:disabled { opacity: 0.5; }
+
+  .att-video-badge {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    pointer-events: none;
+    backdrop-filter: blur(4px);
+    transition: opacity 0.2s;
+  }
+  .att-img-wrap:hover .att-video-badge { opacity: 0; }
+  .att-video-mute {
+    position: absolute;
+    bottom: 10px;
+    right: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    z-index: 3;
+    opacity: 0;
+    backdrop-filter: blur(4px);
+    transition: opacity 0.2s;
+  }
+  .att-img-wrap:hover .att-video-mute { opacity: 1; }
+  .att-video-mute:active { background: rgba(0, 0, 0, 0.75); }
+  .att-video-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    cursor: pointer;
+    z-index: 3;
+    opacity: 0;
+    transition: opacity 0.2s, height 0.15s;
+  }
+  .att-img-wrap:hover .att-video-bar { opacity: 1; height: 6px; }
+  .att-video-bar-fill {
+    height: 100%;
+    background: var(--md-sys-color-primary, #bb86fc);
+    border-radius: 0 1px 1px 0;
+    transition: width 0.1s linear;
+  }
 
   .att-file-download {
     position: absolute;

@@ -4,8 +4,8 @@
 <script lang="ts">
   import Icon from "$lib/ui/Icon.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { saveClipboardImage, getFileInfo, getClipboardFiles } from "$lib/api/bridge";
-  import { isImage } from "$lib/utils/file-utils";
+  import { saveClipboardImage, getFileInfo, getClipboardFiles, getVideoSrc } from "$lib/api/bridge";
+  import { isImage, isVideo } from "$lib/utils/file-utils";
   import { onMount } from "svelte";
 
   interface Props {
@@ -27,8 +27,20 @@
   let fabMenuOpen = $state(false);
 
   const canSend = $derived(!app.transferActive && (app.hasFiles || !!app.sendTextContent.trim()));
-  const imageFiles = $derived(app.files.filter(f => f.info && isImage(f.info.type)));
-  const otherFiles = $derived(app.files.filter(f => !f.info || !isImage(f.info.type)));
+  const isMediaFile = (type: string) => isImage(type) || isVideo(type);
+  const imageFiles = $derived(app.files.filter(f => f.info && isMediaFile(f.info.type)));
+  const otherFiles = $derived(app.files.filter(f => !f.info || !isMediaFile(f.info.type)));
+
+  let videoUrls = $state<Record<string, string>>({});
+  $effect(() => {
+    for (const f of imageFiles) {
+      if (f.info && isVideo(f.info.type) && !(f.path in videoUrls)) {
+        getVideoSrc(f.path).then(url => {
+          if (url) videoUrls = { ...videoUrls, [f.path]: url };
+        });
+      }
+    }
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -102,12 +114,17 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div class="composer-img" onclick={() => onlightbox(file.path, file.info?.name ?? "image")}>
-            {#if thumbCache[file.path] && thumbCache[file.path] !== ""}
+            {#if file.info && isVideo(file.info.type)}
+              {#if videoUrls[file.path]}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video src="{videoUrls[file.path]}#t=0.1" class="composer-img-preview" preload="metadata" muted playsinline></video>
+              {:else}
+                <div class="composer-img-loading"><div class="composer-img-shimmer"></div></div>
+              {/if}
+            {:else if thumbCache[file.path] && thumbCache[file.path] !== ""}
               <img src={thumbCache[file.path]} alt={file.info?.name ?? "image"} class="composer-img-preview" />
             {:else}
-              <div class="composer-img-loading">
-                <div class="composer-img-shimmer"></div>
-              </div>
+              <div class="composer-img-loading"><div class="composer-img-shimmer"></div></div>
             {/if}
             {#if !app.transferActive}
               <button class="composer-img-remove" onclick={(e) => { e.stopPropagation(); app.removeFile(file.path); }}>

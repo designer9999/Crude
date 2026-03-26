@@ -1,9 +1,12 @@
 <!--
-  Fullscreen image lightbox with header actions.
+  Fullscreen image/video lightbox with header actions.
 -->
 <script lang="ts">
   import Icon from "$lib/ui/Icon.svelte";
-  import { showInExplorer, openFile, downloadFile, isMobile } from "$lib/api/bridge";
+  import { showInExplorer, openFile, downloadFile, isMobile, getVideoSrc } from "$lib/api/bridge";
+  import { isVideo } from "$lib/utils/file-utils";
+  import { onMount, onDestroy } from "svelte";
+  import { revokeBlobUrl } from "$lib/api/bridge";
 
   interface Props {
     src: string;
@@ -17,6 +20,24 @@
   let { src, name, path, loading, onclose, onsnackbar }: Props = $props();
   const mobile = isMobile();
   let saving = $state(false);
+  const isVid = $derived(isVideo(name));
+  let videoSrc = $state<string | null>(null);
+  let videoEl = $state<HTMLVideoElement | null>(null);
+  let videoMuted = $state(false);
+  let videoProgress = $state(0);
+  let videoDuration = $state(0);
+  let videoPlaying = $state(false);
+
+  onMount(() => {
+    if (isVid) {
+      getVideoSrc(path).then(s => { videoSrc = s; });
+    }
+  });
+
+  onDestroy(() => {
+    if (videoEl) { videoEl.pause(); videoEl.src = ""; }
+    if (videoSrc) revokeBlobUrl(videoSrc);
+  });
 
   async function handleDownload() {
     if (saving) return;
@@ -29,6 +50,35 @@
       onsnackbar?.(`Failed to save ${name}`);
     }
     saving = false;
+  }
+
+  function togglePlayPause() {
+    if (!videoEl) return;
+    if (videoEl.paused) {
+      videoEl.play().catch(() => {});
+      videoPlaying = true;
+    } else {
+      videoEl.pause();
+      videoPlaying = false;
+    }
+  }
+
+  function handleTimeUpdate() {
+    if (!videoEl) return;
+    videoProgress = videoEl.currentTime;
+    videoDuration = videoEl.duration || 0;
+  }
+
+  function handleSeek(e: Event) {
+    if (!videoEl) return;
+    videoEl.currentTime = Number((e.target as HTMLInputElement).value);
+  }
+
+  function formatDuration(s: number): string {
+    if (!s || !isFinite(s)) return "0:00";
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, "0")}`;
   }
 </script>
 
@@ -55,12 +105,53 @@
       </button>
     </div>
   </div>
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <img {src} alt={name} class="lightbox-img" class:lightbox-img-loading={loading} onclick={(e) => e.stopPropagation()} />
-  {#if loading}
-    <span class="lightbox-loading">Loading full image...</span>
+
+  {#if isVid && videoSrc}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_media_has_caption -->
+    <div class="lightbox-video-container" onclick={(e) => e.stopPropagation()}>
+      <video
+        bind:this={videoEl}
+        src={videoSrc}
+        class="lightbox-video"
+        muted={videoMuted}
+        playsinline
+        ontimeupdate={handleTimeUpdate}
+        onplay={() => videoPlaying = true}
+        onpause={() => videoPlaying = false}
+        onloadedmetadata={() => { if (videoEl) videoDuration = videoEl.duration; }}
+        poster={src || undefined}
+        autoplay
+      ></video>
+      <div class="lightbox-video-controls">
+        <button class="lightbox-ctrl-btn" onclick={togglePlayPause}>
+          <Icon name={videoPlaying ? "pause" : "play_arrow"} size={20} />
+        </button>
+        <span class="lightbox-video-time">{formatDuration(videoProgress)}</span>
+        <input
+          type="range"
+          class="lightbox-video-seek"
+          min="0"
+          max={videoDuration}
+          step="0.1"
+          value={videoProgress}
+          oninput={handleSeek}
+        />
+        <span class="lightbox-video-time">{formatDuration(videoDuration)}</span>
+        <button class="lightbox-ctrl-btn" onclick={() => { videoMuted = !videoMuted; if (videoEl) videoEl.muted = videoMuted; }}>
+          <Icon name={videoMuted ? "volume_off" : "volume_up"} size={18} />
+        </button>
+      </div>
+    </div>
+  {:else}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <img {src} alt={name} class="lightbox-img" class:lightbox-img-loading={loading} onclick={(e) => e.stopPropagation()} />
+    {#if loading}
+      <span class="lightbox-loading">Loading full image...</span>
+    {/if}
   {/if}
 </div>
 
@@ -91,6 +182,7 @@
     justify-content: space-between;
     padding: 8px 12px;
     background: linear-gradient(rgba(0,0,0,0.6), transparent);
+    z-index: 2;
   }
   .lightbox-name {
     font-size: 12px;
@@ -140,5 +232,69 @@
     margin-top: 8px;
     font-size: 11px;
     color: rgba(255,255,255,0.5);
+  }
+
+  /* ── Video lightbox ── */
+  .lightbox-video-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    max-width: 90%;
+    max-height: 80%;
+    cursor: default;
+  }
+  .lightbox-video {
+    max-width: 100%;
+    max-height: calc(80vh - 48px);
+    border-radius: 8px;
+    object-fit: contain;
+    background: #000;
+  }
+  .lightbox-video-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 4px 0;
+  }
+  .lightbox-ctrl-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.12);
+    color: #fff;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+  .lightbox-ctrl-btn:hover { background: rgba(255,255,255,0.25); }
+  .lightbox-video-time {
+    font-size: 11px;
+    color: rgba(255,255,255,0.7);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    min-width: 32px;
+    text-align: center;
+  }
+  .lightbox-video-seek {
+    flex: 1;
+    height: 4px;
+    appearance: none;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  .lightbox-video-seek::-webkit-slider-thumb {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--md-sys-color-primary, #bb86fc);
+    cursor: pointer;
   }
 </style>

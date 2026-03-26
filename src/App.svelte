@@ -10,7 +10,7 @@
   import type { MessageAttachment } from "$lib/state/app-state.svelte";
   import { getStatus, startLanService, lanSendText, lanSendFiles, onLanLog, onLanPeerDiscovered, onLanPeerLost, onLanTextReceived, onLanFilesReceived, onTransferProgress, windowMinimize, windowToggleMaximize, windowClose, windowStartDrag, windowShow, setMica, setDefaultOutFolder, registerShortcut, unregisterShortcut, getFileInfo, getExplorerSelection, getClipboardFiles } from "$lib/api/bridge";
   import type { TransferProgress } from "$lib/api/bridge";
-  import { isImage as fileIsImage, fileSizeStr } from "$lib/utils/file-utils";
+  import { isImage as fileIsImage, isVideo as fileIsVideo, fileSizeStr } from "$lib/utils/file-utils";
   import { playReceiveSound } from "$lib/utils/notification-sound";
 
   import Icon from "$lib/ui/Icon.svelte";
@@ -119,7 +119,7 @@
             for (const f of looseFiles) {
               attachments.push({
                 name: f.name, path: f.path, size: fileSizeStr(f.size),
-                type: fileIsImage(f.name) ? "image" as const : "file" as const,
+                type: fileIsImage(f.name) ? "image" as const : fileIsVideo(f.name) ? "video" as const : "file" as const,
               });
             }
             app.addMessage({ peerId, direction: "received", text: "", attachments });
@@ -195,7 +195,7 @@
         const attachments: MessageAttachment[] = filesCopy.map(f => ({
           name: f.info?.name ?? f.path.split(/[\\/]/).pop() ?? "file",
           path: f.path, size: f.info?.size ?? "",
-          type: fileIsImage(f.info?.name ?? f.path) ? "image" as const : "file" as const,
+          type: fileIsImage(f.info?.name ?? f.path) ? "image" as const : fileIsVideo(f.info?.name ?? f.path) ? "video" as const : "file" as const,
         }));
         app.addMessage({ peerId: device.id, direction: "sent", text: "", attachments });
         app.clearFiles();
