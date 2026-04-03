@@ -292,12 +292,36 @@ pub async fn run_discovery(
     let my_uuid = identity.id_bytes();
     let peers_tcp = discovered_peers.clone();
     let tcp_acceptor = tokio::spawn(async move {
+        let mut listener: Arc<TcpListener> = tcp_listener;
+        let mut consecutive_errors: u32 = 0;
+
         loop {
             if !running_tcp.load(Ordering::Relaxed) {
                 break;
             }
-            let accept = time::timeout(Duration::from_secs(1), tcp_listener.accept()).await;
-            if let Ok(Ok((stream, _addr))) = accept {
+
+            // If accept keeps failing, the socket is dead (network change, sleep/wake).
+            // Rebind the listener to recover.
+            if consecutive_errors >= 5 {
+                emit_log(&handle_tcp, "warn", "TCP listener unhealthy — rebinding...");
+                match TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, TCP_PORT)).await {
+                    Ok(new_listener) => {
+                        listener = Arc::new(new_listener);
+                        consecutive_errors = 0;
+                        emit_log(&handle_tcp, "success", "TCP listener rebound successfully");
+                    }
+                    Err(e) => {
+                        emit_log(&handle_tcp, "error", &format!("TCP rebind failed: {}", e));
+                        time::sleep(Duration::from_secs(3)).await;
+                        continue;
+                    }
+                }
+            }
+
+            let accept = time::timeout(Duration::from_secs(1), listener.accept()).await;
+            match accept {
+                Ok(Ok((stream, _addr))) => {
+                    consecutive_errors = 0;
                 let handle_session = handle_tcp.clone();
                 let folder_map = peer_folders.clone();
                 let default_folder = default_out_folder.clone();
@@ -315,6 +339,11 @@ pub async fn run_discovery(
                         }
                     }
                 });
+                }
+                Ok(Err(_)) => {
+                    consecutive_errors += 1;
+                }
+                Err(_) => {} // Timeout — normal, loop continues
             }
         }
     });

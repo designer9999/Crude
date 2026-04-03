@@ -75,8 +75,15 @@ impl LanService {
         let peer_ip = self.get_peer_ip(peer_id).await;
         if let Some(ip) = peer_ip {
             let uuid = self.identity.id_bytes();
-            transfer::send_text_to_peer(&ip, &uuid, text).await?;
-            Ok(true)
+            // Retry once on failure (TCP listener may have recovered)
+            match transfer::send_text_to_peer(&ip, &uuid, text).await {
+                Ok(()) => Ok(true),
+                Err(_first_err) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    transfer::send_text_to_peer(&ip, &uuid, text).await?;
+                    Ok(true)
+                }
+            }
         } else {
             Err(format!("Peer {} not found or offline", peer_id))
         }
@@ -86,8 +93,14 @@ impl LanService {
         let peer_ip = self.get_peer_ip(peer_id).await;
         if let Some(ip) = peer_ip {
             let uuid = self.identity.id_bytes();
-            transfer::send_files_to_peer(&ip, &uuid, paths, Some(&self.handle)).await?;
-            Ok(true)
+            match transfer::send_files_to_peer(&ip, &uuid, paths, Some(&self.handle)).await {
+                Ok(()) => Ok(true),
+                Err(_first_err) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    transfer::send_files_to_peer(&ip, &uuid, paths, Some(&self.handle)).await?;
+                    Ok(true)
+                }
+            }
         } else {
             Err(format!("Peer {} not found or offline", peer_id))
         }

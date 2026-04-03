@@ -25,7 +25,7 @@
   const theme = getThemeState();
 
   let deviceOpen = $state(false);
-  let themeOpen = $state(true);
+  let themeOpen = $state(false);
   let receiveOpen = $state(false);
   let aboutOpen = $state(false);
   let debugOpen = $state(false);
@@ -392,6 +392,13 @@
       </div>
       <Switch checked={app.notificationsEnabled} onchange={(v) => { app.setNotifications(v); if (v) playReceiveSound(); }} />
     </div>
+    <div class="flex items-center justify-between py-1 mt-1">
+      <div>
+        <div class="text-sm text-on-surface">Pop up on receive</div>
+        <div class="text-xs text-on-surface-variant">Bring window to front when messages or files arrive</div>
+      </div>
+      <Switch checked={app.popOnReceive} onchange={(v) => app.setPopOnReceive(v)} />
+    </div>
     <div class="text-xs text-on-surface-variant mt-2 opacity-60">
       Closing the window minimizes to system tray. Right-click the tray icon for options.
     </div>
@@ -413,6 +420,7 @@
     {#if app.hotkeys.enabled}
       <div class="mt-3 flex items-center gap-3">
         <div class="flex-1">
+          <div style="--tf-bg: var(--md-sys-color-surface-container-low)">
           <TextField
             label="Quick send shortcut"
             value={app.hotkeys.quickSend}
@@ -422,7 +430,7 @@
               app.updateHotkeys({ quickSend: val });
             }}
           />
-        </div>
+        </div></div>
       </div>
       <div class="text-xs text-on-surface-variant mt-1 opacity-70">
         Press this key anywhere to open file picker and attach to current chat

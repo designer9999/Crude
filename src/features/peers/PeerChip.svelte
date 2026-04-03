@@ -16,10 +16,11 @@
 
 <button
   class="peer-chip"
+  class:peer-selected={selected}
   {onclick}
   title="{device.alias}{device.online ? '' : ' (offline)'}"
 >
-  <PeerAvatar name={device.alias} color={device.color} size="sm" />
+  <PeerAvatar name={device.alias} color={device.color} size="sm" {selected} />
   {#if device.online}
     <span class="status-dot" class:selected></span>
   {:else}

@@ -123,17 +123,19 @@ pub async fn get_file_info(path: String) -> Result<FileInfo, String> {
 #[tauri::command]
 pub async fn show_in_explorer(path: String) -> Result<bool, String> {
     let p = Path::new(&path);
-    let target = if p.is_file() {
-        p.parent().unwrap_or(p)
-    } else {
-        p
-    };
 
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("explorer")
-            .arg(target.to_string_lossy().to_string())
-            .spawn();
+        if p.is_file() {
+            // /select, opens the folder AND highlights the file
+            let _ = std::process::Command::new("explorer")
+                .args(["/select,", &p.to_string_lossy()])
+                .spawn();
+        } else {
+            let _ = std::process::Command::new("explorer")
+                .arg(p.to_string_lossy().to_string())
+                .spawn();
+        }
     }
 
     #[cfg(target_os = "macos")]

@@ -401,6 +401,7 @@
       path={filePreviewPath}
       loading={filePreviewLoading}
       onclose={closeFilePreview}
+      {onsnackbar}
     />
   {/if}
 </div>

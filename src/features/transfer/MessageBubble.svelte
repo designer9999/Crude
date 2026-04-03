@@ -184,6 +184,10 @@
               <button class="att-img-download" onclick={(e) => { e.stopPropagation(); handleDownload(item.path, item.name); }} title="Save" disabled={downloading[item.path]}>
                 <Icon name={downloading[item.path] ? "hourglass_empty" : "download"} size={16} />
               </button>
+            {:else if !mobile}
+              <button class="att-open-folder" onclick={(e) => { e.stopPropagation(); showInExplorer(item.path); }} title="Show in folder">
+                <Icon name="open_in_new" size={14} />
+              </button>
             {/if}
           </div>
         {/each}
@@ -211,6 +215,10 @@
               {#if mobile && !isSent}
                 <button class="att-file-download" onclick={(e) => { e.stopPropagation(); handleDownload(file.path, file.name); }} title="Save" disabled={downloading[file.path]}>
                   <Icon name={downloading[file.path] ? "hourglass_empty" : "download"} size={16} />
+                </button>
+              {:else if !mobile}
+                <button class="att-file-open-folder" onclick={(e) => { e.stopPropagation(); showInExplorer(file.path); }} title="Show in folder">
+                  <Icon name="open_in_new" size={12} />
                 </button>
               {/if}
             </div>
@@ -361,6 +369,28 @@
   .att-img-download:active { background: rgba(0, 0, 0, 0.75); }
   .att-img-download:disabled { opacity: 0.5; }
 
+  .att-open-folder {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    z-index: 3;
+    opacity: 0;
+    backdrop-filter: blur(4px);
+    transition: opacity 0.2s;
+  }
+  .att-img-wrap:hover .att-open-folder { opacity: 1; }
+  .att-open-folder:active { background: rgba(0, 0, 0, 0.75); }
+
   .att-video-badge {
     position: absolute;
     top: 50%;
@@ -438,6 +468,26 @@
   }
   .att-file-download:active { background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent); }
   .att-file-download:disabled { opacity: 0.5; }
+  .att-file-open-folder {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: none;
+    background: color-mix(in srgb, var(--md-sys-color-primary) 15%, transparent);
+    color: var(--md-sys-color-primary);
+    cursor: pointer;
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .att-file-card:hover .att-file-open-folder { opacity: 1; }
+  .att-file-open-folder:active { background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent); }
 
   .att-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
   .att-file-card {

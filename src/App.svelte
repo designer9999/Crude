@@ -89,6 +89,7 @@
           app.addMessage({ peerId, direction: "received", text });
           app.addActivity({ peerId, direction: "received", type: "text", items: [], success: true });
           if (app.notificationsEnabled) playReceiveSound();
+          if (app.popOnReceive) windowShow();
         }),
         onLanFilesReceived((peerId, files, details) => {
           if (!app.activeDeviceId) app.setActiveDevice(peerId);
@@ -125,6 +126,7 @@
             app.addMessage({ peerId, direction: "received", text: "", attachments });
           }
           if (app.notificationsEnabled) playReceiveSound();
+          if (app.popOnReceive) windowShow();
         }),
         onTransferProgress((progress) => {
           transferProgress = progress.phase === "done" ? null : progress;
@@ -143,7 +145,11 @@
     if (paths.length === 0) {
       paths = await getClipboardFiles().catch(() => [] as string[]);
     }
-    if (paths.length === 0) return;
+    if (paths.length === 0) {
+      // Nothing selected — just bring app to focus
+      await windowShow();
+      return;
+    }
     for (const path of paths) {
       const info = await getFileInfo(path);
       app.addFile(path, info);

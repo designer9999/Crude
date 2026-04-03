@@ -9,9 +9,10 @@
     name: string;
     color: number;
     size?: "sm" | "md" | "lg";
+    selected?: boolean;
   }
 
-  let { name, color, size = "md" }: Props = $props();
+  let { name, color, size = "md", selected = false }: Props = $props();
 
   const initial = $derived(name.charAt(0).toUpperCase());
   const bg = $derived(PEER_COLORS[color % PEER_COLORS.length]);
@@ -21,7 +22,7 @@
 
 <div
   class="shrink-0 rounded-full flex items-center justify-center font-medium text-white select-none"
-  style="width: {px}px; height: {px}px; font-size: {fs}px; background-color: {bg};"
+  style="width: {px}px; height: {px}px; font-size: {fs}px; background-color: {bg};{selected ? ` box-shadow: inset 0 0 0 2px rgba(255,255,255,0.7);` : ''}"
 >
   {initial}
 </div>

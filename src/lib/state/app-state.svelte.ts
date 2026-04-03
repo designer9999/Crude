@@ -150,6 +150,7 @@ class AppState {
 
   // Settings
   notificationsEnabled = $state<boolean>(loadJson<{ n: boolean }>(SETTINGS_KEY, { n: true }).n);
+  popOnReceive = $state<boolean>(loadJson<{ pop: boolean }>(SETTINGS_KEY, { pop: false }).pop);
   receiveOptions = $state<ReceiveOptions>(loadJson(RECEIVE_KEY, {}));
   hotkeys = $state<HotkeySettings>(loadJson(HOTKEYS_KEY, DEFAULT_HOTKEYS));
 
@@ -366,7 +367,12 @@ class AppState {
 
   setNotifications(enabled: boolean) {
     this.notificationsEnabled = enabled;
-    saveJson(SETTINGS_KEY, { n: enabled });
+    saveJson(SETTINGS_KEY, { n: enabled, pop: this.popOnReceive });
+  }
+
+  setPopOnReceive(enabled: boolean) {
+    this.popOnReceive = enabled;
+    saveJson(SETTINGS_KEY, { n: this.notificationsEnabled, pop: enabled });
   }
 
   updateReceiveOption<K extends keyof ReceiveOptions>(key: K, value: ReceiveOptions[K]) {
