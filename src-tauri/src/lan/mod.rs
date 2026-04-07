@@ -3,8 +3,10 @@ pub mod identity;
 pub mod protocol;
 pub mod transfer;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -14,10 +16,45 @@ use discovery::DiscoveredPeer;
 use identity::normalize_uuid;
 use identity::DeviceIdentity;
 
+#[derive(Default, Serialize, Deserialize)]
+struct PersistedFolderSettings {
+    default_out_folder: String,
+    peer_folders: HashMap<String, String>,
+}
+
+fn folder_settings_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("receive_folders.json")
+}
+
+fn load_folder_settings(data_dir: &Path) -> PersistedFolderSettings {
+    let settings_path = folder_settings_path(data_dir);
+    fs::read_to_string(settings_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<PersistedFolderSettings>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_folder_settings(
+    data_dir: &Path,
+    default_out_folder: &str,
+    peer_folders: &HashMap<String, String>,
+) {
+    let _ = fs::create_dir_all(data_dir);
+    let settings_path = folder_settings_path(data_dir);
+    let payload = PersistedFolderSettings {
+        default_out_folder: default_out_folder.to_string(),
+        peer_folders: peer_folders.clone(),
+    };
+
+    if let Ok(json) = serde_json::to_string_pretty(&payload) {
+        let _ = fs::write(settings_path, json);
+    }
+}
+
 pub struct LanService {
     pub handle: AppHandle,
     running: Arc<AtomicBool>,
-    pub identity: DeviceIdentity,
+    identity: DeviceIdentity,
     data_dir: PathBuf,
     /// All discovered peers on the LAN, keyed by device UUID
     discovered_peers: Arc<Mutex<HashMap<String, DiscoveredPeer>>>,
@@ -32,14 +69,15 @@ pub struct LanService {
 impl LanService {
     pub fn new(handle: AppHandle, identity: DeviceIdentity, data_dir: PathBuf) -> Self {
         let alias = identity.alias.clone();
+        let folder_settings = load_folder_settings(&data_dir);
         Self {
             handle,
             running: Arc::new(AtomicBool::new(false)),
             identity,
             data_dir,
             discovered_peers: Arc::new(Mutex::new(HashMap::new())),
-            peer_folders: Arc::new(Mutex::new(HashMap::new())),
-            default_out_folder: Arc::new(Mutex::new(String::new())),
+            peer_folders: Arc::new(Mutex::new(folder_settings.peer_folders)),
+            default_out_folder: Arc::new(Mutex::new(folder_settings.default_out_folder)),
             alias: Arc::new(Mutex::new(alias)),
         }
     }
@@ -133,21 +171,31 @@ impl LanService {
         } else {
             folders.insert(normalized, folder.to_string());
         }
+        drop(folders);
+        self.persist_folder_settings().await;
     }
 
     pub async fn set_default_folder(&self, folder: &str) {
         *self.default_out_folder.lock().await = folder.to_string();
+        self.persist_folder_settings().await;
     }
 
-    pub async fn set_alias(&mut self, new_alias: &str) {
+    pub async fn get_folder_settings(&self) -> (String, HashMap<String, String>) {
+        let default_out_folder = self.default_out_folder.lock().await.clone();
+        let peer_folders = self.peer_folders.lock().await.clone();
+        (default_out_folder, peer_folders)
+    }
+
+    pub async fn set_alias(&self, new_alias: &str) {
         *self.alias.lock().await = new_alias.to_string();
-        // Update the identity in memory AND persist to disk
-        self.identity.alias = new_alias.to_string();
-        self.identity.save_alias(&self.data_dir);
+        let alias_file = self.data_dir.join("device_alias.txt");
+        let _ = fs::write(alias_file, new_alias);
     }
 
-    pub fn get_identity(&self) -> &DeviceIdentity {
-        &self.identity
+    pub async fn get_identity(&self) -> DeviceIdentity {
+        let mut identity = self.identity.clone();
+        identity.alias = self.alias.lock().await.clone();
+        identity
     }
 
     async fn get_peer_ip(&self, peer_id: &str) -> Option<String> {
@@ -184,16 +232,46 @@ impl LanService {
 
         hinted_ip
     }
+
+    async fn persist_folder_settings(&self) {
+        let default_out_folder = self.default_out_folder.lock().await.clone();
+        let peer_folders = self.peer_folders.lock().await.clone();
+        save_folder_settings(&self.data_dir, &default_out_folder, &peer_folders);
+    }
 }
 
 pub struct LanState {
-    pub service: Mutex<LanService>,
+    pub service: LanService,
 }
 
 impl LanState {
     pub fn new(handle: AppHandle, identity: DeviceIdentity, data_dir: PathBuf) -> Self {
         Self {
-            service: Mutex::new(LanService::new(handle, identity, data_dir)),
+            service: LanService::new(handle, identity, data_dir),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_folder_settings, save_folder_settings};
+    use std::collections::HashMap;
+
+    #[test]
+    fn folder_settings_round_trip() {
+        let temp_dir = std::env::temp_dir().join(format!("landrop-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+        let mut peer_folders = HashMap::new();
+        peer_folders.insert("peer-a".to_string(), "C:\\Transfers\\PeerA".to_string());
+        peer_folders.insert("peer-b".to_string(), "D:\\Inbox\\PeerB".to_string());
+
+        save_folder_settings(&temp_dir, "C:\\Transfers", &peer_folders);
+        let loaded = load_folder_settings(&temp_dir);
+
+        assert_eq!(loaded.default_out_folder, "C:\\Transfers");
+        assert_eq!(loaded.peer_folders, peer_folders);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

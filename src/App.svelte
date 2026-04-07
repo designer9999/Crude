@@ -8,9 +8,11 @@
   import { applyThemeToDOM } from "$lib/theme/apply-theme";
   import { getAppState } from "$lib/state/app-state.svelte";
   import type { MessageAttachment } from "$lib/state/app-state.svelte";
-  import { getStatus, startLanService, lanSendText, lanSendFiles, onLanLog, onLanPeerDiscovered, onLanPeerLost, onLanTextReceived, onLanFilesReceived, onTransferProgress, windowMinimize, windowToggleMaximize, windowClose, windowStartDrag, windowShow, setMica, setDefaultOutFolder, registerShortcut, unregisterShortcut, getFileInfo, getExplorerSelection, getClipboardFiles } from "$lib/api/bridge";
+  import { getStatus, startLanService, lanSendText, lanSendFiles, onLanLog, onLanPeerDiscovered, onLanPeerLost, onLanTextReceived, onLanFilesReceived, onTransferProgress, windowMinimize, windowToggleMaximize, windowClose, windowStartDrag, windowShow, setMica, setDefaultOutFolder, setPeerOutFolder, getReceiveFolderSettings, registerShortcut, unregisterShortcut, getFileInfo, getExplorerSelection, getClipboardFiles } from "$lib/api/bridge";
   import type { TransferProgress } from "$lib/api/bridge";
+  import { loadPersistedAppState, savePersistedAppState } from "$lib/persistence/app-store";
   import { isImage as fileIsImage, isVideo as fileIsVideo, fileSizeStr } from "$lib/utils/file-utils";
+  import { sendNativeNotification } from "$lib/utils/native-notifications";
   import { playReceiveSound } from "$lib/utils/notification-sound";
 
   import Icon from "$lib/ui/Icon.svelte";
@@ -31,6 +33,12 @@
 
   let deviceDialogOpen = $state(false);
   let editingDevice = $state<import("$lib/state/app-state.svelte").DiscoveredDevice | null>(null);
+  let persistedStateReady = $state(false);
+  let receiveSettingsReady = $state(false);
+  let persistedPeerFolders = $state<Record<string, string>>({});
+  let transferRateBps = $state<number | null>(null);
+  let transferEtaSeconds = $state<number | null>(null);
+  let lastProgressSample = $state<{ bytes: number; at: number; direction: "send" | "receive" } | null>(null);
 
   function showSnackbar(msg: string) {
     snackbarMsg = msg;
@@ -42,23 +50,147 @@
     deviceDialogOpen = true;
   }
 
+  function getReceivedFolderPath(filePath: string, relativeName: string): string {
+    let folderPath = filePath;
+    const segmentCount = relativeName.split("/").filter(Boolean).length;
+    for (let i = 1; i < segmentCount; i += 1) {
+      folderPath = folderPath.replace(/[\\/][^\\/]+$/, "");
+    }
+    return folderPath;
+  }
+
+  function joinReceivePath(baseFolder: string, name: string): string {
+    const trimmedBase = baseFolder.replace(/[\\/]+$/, "");
+    if (!trimmedBase) return name;
+    const separator = trimmedBase.includes("\\") ? "\\" : "/";
+    const normalizedName = name
+      .replace(/^[/\\]+/, "")
+      .replace(/[\\/]+/g, separator);
+    return `${trimmedBase}${separator}${normalizedName}`;
+  }
+
+  function getConfiguredOutFolder(peerId: string): string {
+    return app.devices.find((device) => device.id === peerId)?.outFolder
+      ?? app.receiveOptions.outFolder
+      ?? "";
+  }
+
+  function getAttachmentCandidates(attachment: MessageAttachment): Array<{ name: string; path: string }> {
+    return [
+      { name: attachment.name, path: attachment.path },
+      ...(attachment.children ?? []).map((child) => ({ name: child.name, path: child.path })),
+    ];
+  }
+
+  async function repairStoredMessagePaths() {
+    let repairedCount = 0;
+
+    for (const message of app.messages) {
+      if (message.direction !== "received" || !message.attachments?.length) continue;
+
+      const outFolder = getConfiguredOutFolder(message.peerId).trim();
+      if (!outFolder) continue;
+
+      for (const attachment of message.attachments) {
+        for (const candidate of getAttachmentCandidates(attachment)) {
+          if (await getFileInfo(candidate.path)) continue;
+
+          const repairedPath = joinReceivePath(outFolder, candidate.name);
+          if (!await getFileInfo(repairedPath)) continue;
+
+          app.updateAttachmentPath(message.id, candidate.path, repairedPath);
+          repairedCount += 1;
+        }
+      }
+    }
+
+    if (repairedCount > 0) {
+      showSnackbar(`Re-linked ${repairedCount} saved item${repairedCount === 1 ? "" : "s"} to your current folder`);
+    }
+  }
+
   $effect(() => {
     applyThemeToDOM(theme.tokens);
   });
 
+  let persistedStateSaveTimer: ReturnType<typeof setTimeout>;
+  let previousPersistedState = "";
+  $effect(() => {
+    if (!persistedStateReady) return;
+    const snapshot = app.exportPersistedState();
+    const serialized = JSON.stringify(snapshot);
+    if (serialized === previousPersistedState) return;
+
+    previousPersistedState = serialized;
+    clearTimeout(persistedStateSaveTimer);
+    persistedStateSaveTimer = setTimeout(() => {
+      savePersistedAppState(snapshot).catch(() => {});
+    }, 200);
+  });
+  $effect(() => () => clearTimeout(persistedStateSaveTimer));
+
   // Sync default out folder to backend when settings change
   $effect(() => {
+    if (!receiveSettingsReady) return;
     const folder = app.receiveOptions.outFolder ?? "";
     setDefaultOutFolder(folder);
+  });
+
+  let previousPeerFolderState = "";
+  $effect(() => {
+    if (!receiveSettingsReady) return;
+    const peerFolders = app.devices
+      .map((device) => `${device.id}:${device.outFolder ?? ""}`)
+      .sort()
+      .join("|");
+
+    if (peerFolders === previousPeerFolderState) return;
+    previousPeerFolderState = peerFolders;
+
+    for (const device of app.devices) {
+      setPeerOutFolder(device.id, device.outFolder ?? "");
+    }
   });
 
   onMount(() => {
     let unlisteners: Array<() => void> = [];
 
     (async () => {
+      const persistedState = await loadPersistedAppState().catch(() => null);
+      if (persistedState) {
+        app.hydratePersistedState(persistedState);
+      } else {
+        const legacyState = app.loadLegacyPersistedState();
+        if (legacyState) {
+          app.hydratePersistedState(legacyState);
+          await savePersistedAppState(legacyState).catch(() => {});
+          app.clearLegacyPersistedState();
+        }
+      }
+      previousPersistedState = JSON.stringify(app.exportPersistedState());
+      persistedStateReady = true;
+
       const status = await getStatus();
       app.localIp = status.local_ip ?? "unknown";
       if (status.app_version) appVersion = status.app_version;
+
+      try {
+        const savedFolders = await getReceiveFolderSettings();
+        persistedPeerFolders = savedFolders.peer_folders ?? {};
+
+        const savedDefaultFolder = savedFolders.default_out_folder?.trim() ?? "";
+        if (savedDefaultFolder && savedDefaultFolder !== (app.receiveOptions.outFolder?.trim() ?? "")) {
+          app.updateReceiveOption("outFolder", savedDefaultFolder || undefined);
+        }
+
+        for (const [peerId, folder] of Object.entries(persistedPeerFolders)) {
+          const existingDevice = app.devices.find((device) => device.id === peerId);
+          if (existingDevice && (existingDevice.outFolder ?? "") !== folder) {
+            app.updateDeviceSettings(peerId, { outFolder: folder || undefined });
+          }
+        }
+      } catch {}
+      receiveSettingsReady = true;
 
       // Restore mica if enabled
       if (theme.mica) {
@@ -69,6 +201,7 @@
 
       // Start mDNS discovery — zero config, no passwords
       await startLanService();
+      await repairStoredMessagePaths();
 
       unlisteners = await Promise.all([
         onLanLog((level, text) => {
@@ -77,6 +210,10 @@
         }),
         onLanPeerDiscovered((peer) => {
           app.upsertDevice(peer);
+          const savedOutFolder = persistedPeerFolders[peer.id];
+          if (savedOutFolder && app.devices.find((device) => device.id === peer.id)?.outFolder !== savedOutFolder) {
+            app.updateDeviceSettings(peer.id, { outFolder: savedOutFolder });
+          }
           app.addLog("success", `Device discovered: ${peer.alias} (${peer.ip})`);
         }),
         onLanPeerLost((peerId) => {
@@ -89,6 +226,12 @@
           app.addMessage({ peerId, direction: "received", text });
           app.addActivity({ peerId, direction: "received", type: "text", items: [], success: true });
           if (app.notificationsEnabled) playReceiveSound();
+          if (app.notificationsEnabled && !document.hasFocus()) {
+            sendNativeNotification(
+              app.devices.find((device) => device.id === peerId)?.alias ?? "LanDrop",
+              text || "New message received"
+            ).catch(() => {});
+          }
           if (app.popOnReceive) windowShow();
         }),
         onLanFilesReceived((peerId, files, details) => {
@@ -111,10 +254,16 @@
             const attachments: MessageAttachment[] = [];
             for (const [folder, folderDetails] of folderFiles) {
               const totalSize = folderDetails.reduce((sum, f) => sum + f.size, 0);
-              const folderPath = folderDetails[0].path.replace(/[\\/][^\\/]+$/, "");
+              const folderPath = getReceivedFolderPath(folderDetails[0].path, folderDetails[0].name);
+              const children = folderDetails.map((detail) => ({
+                name: detail.name,
+                path: detail.path,
+                size: fileSizeStr(detail.size),
+                type: fileIsImage(detail.name) ? "image" as const : fileIsVideo(detail.name) ? "video" as const : "file" as const,
+              }));
               attachments.push({
                 name: folder, path: folderPath, size: fileSizeStr(totalSize),
-                type: "folder" as const, fileCount: folderDetails.length,
+                type: "folder" as const, fileCount: folderDetails.length, children,
               });
             }
             for (const f of looseFiles) {
@@ -126,9 +275,37 @@
             app.addMessage({ peerId, direction: "received", text: "", attachments });
           }
           if (app.notificationsEnabled) playReceiveSound();
+          if (app.notificationsEnabled && !document.hasFocus()) {
+            const peerAlias = app.devices.find((device) => device.id === peerId)?.alias ?? "LanDrop";
+            const body = files.length === 1 ? `Received ${files[0]}` : `Received ${files.length} items`;
+            sendNativeNotification(peerAlias, body).catch(() => {});
+          }
           if (app.popOnReceive) windowShow();
         }),
         onTransferProgress((progress) => {
+          const completedBytes = progress.sent_bytes ?? progress.received_bytes ?? 0;
+          const totalBytes = progress.total_bytes ?? 0;
+          if (progress.phase === "start") {
+            lastProgressSample = completedBytes > 0 ? { bytes: completedBytes, at: Date.now(), direction: progress.direction } : null;
+            transferRateBps = null;
+            transferEtaSeconds = null;
+          } else if (progress.phase === "transferring" && totalBytes > 0) {
+            const now = Date.now();
+            if (lastProgressSample && lastProgressSample.direction === progress.direction) {
+              const elapsedMs = now - lastProgressSample.at;
+              const byteDelta = completedBytes - lastProgressSample.bytes;
+              if (elapsedMs > 0 && byteDelta > 0) {
+                transferRateBps = byteDelta / (elapsedMs / 1000);
+                const remainingBytes = Math.max(0, totalBytes - completedBytes);
+                transferEtaSeconds = transferRateBps > 0 ? remainingBytes / transferRateBps : null;
+              }
+            }
+            lastProgressSample = { bytes: completedBytes, at: now, direction: progress.direction };
+          } else if (progress.phase === "done") {
+            lastProgressSample = null;
+            transferRateBps = null;
+            transferEtaSeconds = null;
+          }
           transferProgress = progress.phase === "done" ? null : progress;
         }),
       ]);
@@ -244,6 +421,20 @@
     return Math.round((done / transferProgress.total_bytes) * 100);
   });
 
+  const transferRateLabel = $derived.by(() => {
+    if (!transferRateBps) return "";
+    return `${fileSizeStr(Math.round(transferRateBps))}/s`;
+  });
+
+  const transferEtaLabel = $derived.by(() => {
+    if (!transferEtaSeconds || !isFinite(transferEtaSeconds)) return "";
+    const secs = Math.max(0, Math.round(transferEtaSeconds));
+    if (secs < 60) return `${secs}s left`;
+    const mins = Math.floor(secs / 60);
+    const rem = secs % 60;
+    return `${mins}m ${rem}s left`;
+  });
+
   function handleTitlebarMouseDown(e: MouseEvent) {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
@@ -307,12 +498,17 @@
       <div class="progress-bar-fill" style="width: {progressPct ?? 0}%"></div>
       <div class="progress-bar-content">
         <Icon name={transferProgress.direction === "send" ? "upload" : "download"} size={14} />
-        <span class="truncate flex-1">
-          {transferProgress.direction === "send" ? "Sending" : "Receiving"}
-          {#if transferProgress.current_file}
-            {transferProgress.current_file.split("/").pop()}
+        <div class="progress-text">
+          <span class="truncate flex-1">
+            {transferProgress.direction === "send" ? "Sending" : "Receiving"}
+            {#if transferProgress.current_file}
+              {transferProgress.current_file.split("/").pop()}
+            {/if}
+          </span>
+          {#if transferRateLabel || transferEtaLabel}
+            <span class="progress-meta">{[transferRateLabel, transferEtaLabel].filter(Boolean).join(" · ")}</span>
           {/if}
-        </span>
+        </div>
         {#if progressPct !== null}
           <span class="progress-pct">{progressPct}%</span>
         {/if}
@@ -404,6 +600,17 @@
     padding: 6px 16px;
     font-size: 12px;
     color: var(--md-sys-color-primary);
+  }
+  .progress-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+  .progress-meta {
+    font-size: 10px;
+    opacity: 0.75;
+    white-space: nowrap;
   }
   .progress-pct {
     font-variant-numeric: tabular-nums;

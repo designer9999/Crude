@@ -1,7 +1,8 @@
 use crate::lan::LanState;
 use base64::Engine;
 use serde::Serialize;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 #[derive(Serialize)]
@@ -20,6 +21,12 @@ pub struct FileInfo {
     pub count: Option<usize>,
 }
 
+#[derive(Serialize)]
+pub struct ReceiveFolderSettingsResponse {
+    pub default_out_folder: String,
+    pub peer_folders: HashMap<String, String>,
+}
+
 #[tauri::command]
 pub async fn get_status() -> Result<StatusResponse, String> {
     let local_ip = get_local_ip_inner();
@@ -32,14 +39,12 @@ pub async fn get_status() -> Result<StatusResponse, String> {
 
 #[tauri::command]
 pub async fn start_lan_service(state: State<'_, LanState>) -> Result<(), String> {
-    let service = state.service.lock().await;
-    service.start().await
+    state.service.start().await
 }
 
 #[tauri::command]
 pub async fn stop_lan_service(state: State<'_, LanState>) -> Result<(), String> {
-    let service = state.service.lock().await;
-    service.stop().await;
+    state.service.stop().await;
     Ok(())
 }
 
@@ -50,8 +55,10 @@ pub async fn lan_send_text(
     peer_ip: Option<String>,
     state: State<'_, LanState>,
 ) -> Result<bool, String> {
-    let service = state.service.lock().await;
-    service.send_text(&peer_id, peer_ip.as_deref(), &text).await
+    state
+        .service
+        .send_text(&peer_id, peer_ip.as_deref(), &text)
+        .await
 }
 
 #[tauri::command]
@@ -61,8 +68,8 @@ pub async fn lan_send_files(
     peer_ip: Option<String>,
     state: State<'_, LanState>,
 ) -> Result<bool, String> {
-    let service = state.service.lock().await;
-    service
+    state
+        .service
         .send_files(&peer_id, peer_ip.as_deref(), &paths)
         .await
 }
@@ -72,8 +79,7 @@ pub async fn set_default_out_folder(
     folder: String,
     state: State<'_, LanState>,
 ) -> Result<(), String> {
-    let service = state.service.lock().await;
-    service.set_default_folder(&folder).await;
+    state.service.set_default_folder(&folder).await;
     Ok(())
 }
 
@@ -83,22 +89,30 @@ pub async fn set_peer_out_folder(
     folder: String,
     state: State<'_, LanState>,
 ) -> Result<(), String> {
-    let service = state.service.lock().await;
-    service.set_peer_folder(&peer_id, &folder).await;
+    state.service.set_peer_folder(&peer_id, &folder).await;
     Ok(())
 }
 
 #[tauri::command]
+pub async fn get_receive_folder_settings(
+    state: State<'_, LanState>,
+) -> Result<ReceiveFolderSettingsResponse, String> {
+    let (default_out_folder, peer_folders) = state.service.get_folder_settings().await;
+    Ok(ReceiveFolderSettingsResponse {
+        default_out_folder,
+        peer_folders,
+    })
+}
+
+#[tauri::command]
 pub async fn set_device_alias(alias: String, state: State<'_, LanState>) -> Result<(), String> {
-    let mut service = state.service.lock().await;
-    service.set_alias(&alias).await;
+    state.service.set_alias(&alias).await;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_device_identity(state: State<'_, LanState>) -> Result<serde_json::Value, String> {
-    let service = state.service.lock().await;
-    let id = service.get_identity();
+    let id = state.service.get_identity().await;
     Ok(serde_json::json!({
         "id": id.id,
         "alias": id.alias,
@@ -155,20 +169,29 @@ pub async fn get_file_info(path: String) -> Result<FileInfo, String> {
 
 #[tauri::command]
 pub async fn show_in_explorer(path: String) -> Result<bool, String> {
-    let p = Path::new(&path);
+    let requested = PathBuf::from(path);
+    let target = if requested.exists() {
+        requested
+    } else if let Some(parent) = requested.parent().filter(|parent| parent.exists()) {
+        parent.to_path_buf()
+    } else {
+        return Err("Path does not exist".to_string());
+    };
 
     #[cfg(target_os = "windows")]
     {
-        if p.is_file() {
-            // /select, opens the folder AND highlights the file
-            let _ = std::process::Command::new("explorer")
-                .args(["/select,", &p.to_string_lossy()])
-                .spawn();
+        let canonical = target.canonicalize().unwrap_or(target.clone());
+        let mut command = std::process::Command::new("explorer");
+
+        if canonical.is_file() {
+            // /select,<path> opens the parent folder and highlights the file.
+            let select_arg = format!("/select,{}", canonical.to_string_lossy());
+            command.arg(select_arg);
         } else {
-            let _ = std::process::Command::new("explorer")
-                .arg(p.to_string_lossy().to_string())
-                .spawn();
+            command.arg(canonical.to_string_lossy().to_string());
         }
+
+        command.spawn().map_err(|e| e.to_string())?;
     }
 
     #[cfg(target_os = "macos")]
@@ -545,6 +568,18 @@ fn explorer_selection_com() -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn open_file(path: String, app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
+    let target = PathBuf::from(&path);
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if !target.exists() {
+            return Err("open_file: path does not exist".to_string());
+        }
+        if !target.is_dir() {
+            return Err("open_file: desktop open is restricted to folders".to_string());
+        }
+    }
+
     app.opener()
         .open_path(&path, None::<&str>)
         .map_err(|e| format!("open_file: {e}"))

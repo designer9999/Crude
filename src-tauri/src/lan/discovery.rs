@@ -135,7 +135,7 @@ pub async fn run_discovery(
         MDNS_SERVICE_TYPE,
         &instance_name,
         &host_name,
-        &local_ip.to_string(),
+        local_ip.to_string(),
         TCP_PORT,
         &properties[..],
     ) {
@@ -205,8 +205,8 @@ pub async fn run_discovery(
     // mDNS ServiceRemoved is unreliable on Windows — spurious removals happen
     // on network adapter changes, Wi-Fi blips, mDNS cache expiry, etc.
     // We defer removal and verify with a TCP check before marking offline.
-    let pending_removals: Arc<Mutex<HashMap<String, (Instant, String, u16)>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    type PendingRemovalMap = Arc<Mutex<HashMap<String, (Instant, String, u16)>>>;
+    let pending_removals: PendingRemovalMap = Arc::new(Mutex::new(HashMap::new()));
 
     let running_mdns = running.clone();
     let handle_mdns = handle.clone();
@@ -261,7 +261,7 @@ pub async fn run_discovery(
             }
 
             // Poll mDNS events with timeout so we can check `running`
-            match tokio::time::timeout(
+            if let Ok(Ok(Ok(event))) = tokio::time::timeout(
                 Duration::from_secs(1),
                 tokio::task::spawn_blocking({
                     let recv = browse_receiver.clone();
@@ -270,111 +270,108 @@ pub async fn run_discovery(
             )
             .await
             {
-                Ok(Ok(Ok(event))) => {
-                    match event {
-                        ServiceEvent::ServiceResolved(info) => {
-                            // Extract peer info from TXT records
-                            let props = info.get_properties();
-                            let raw_peer_id = props.get_property_val_str("id").unwrap_or_default();
-                            let peer_id = match normalize_uuid(raw_peer_id) {
-                                Some(id) => id,
-                                None => {
-                                    if !raw_peer_id.is_empty() {
-                                        emit_log(
-                                            &handle_mdns,
-                                            "warn",
-                                            &format!(
-                                                "Ignoring peer with invalid UUID: {}",
-                                                raw_peer_id
-                                            ),
-                                        );
-                                    }
-                                    continue;
-                                }
-                            };
-                            let peer_alias = props
-                                .get_property_val_str("alias")
-                                .unwrap_or_default()
-                                .to_string();
-                            let peer_dtype = props
-                                .get_property_val_str("dtype")
-                                .unwrap_or("desktop")
-                                .to_string();
-
-                            // Skip our own service
-                            if peer_id == my_id_mdns || peer_id.is_empty() {
-                                continue;
-                            }
-
-                            // Get the first IPv4 address
-                            let ip = info
-                                .get_addresses()
-                                .iter()
-                                .find(|a| a.is_ipv4())
-                                .map(|a| a.to_string())
-                                .unwrap_or_default();
-
-                            if ip.is_empty() {
-                                continue;
-                            }
-
-                            // Cancel any pending removal — peer is alive
-                            {
-                                let mut pending = pending_mdns.lock().await;
-                                if pending.remove(&peer_id).is_some() {
+                match event {
+                    ServiceEvent::ServiceResolved(info) => {
+                        // Extract peer info from TXT records
+                        let props = info.get_properties();
+                        let raw_peer_id = props.get_property_val_str("id").unwrap_or_default();
+                        let peer_id = match normalize_uuid(raw_peer_id) {
+                            Some(id) => id,
+                            None => {
+                                if !raw_peer_id.is_empty() {
                                     emit_log(
                                         &handle_mdns,
-                                        "info",
+                                        "warn",
                                         &format!(
-                                            "Cancelled pending removal for {} (re-discovered)",
-                                            &peer_id[..8]
+                                            "Ignoring peer with invalid UUID: {}",
+                                            raw_peer_id
                                         ),
                                     );
                                 }
+                                continue;
                             }
+                        };
+                        let peer_alias = props
+                            .get_property_val_str("alias")
+                            .unwrap_or_default()
+                            .to_string();
+                        let peer_dtype = props
+                            .get_property_val_str("dtype")
+                            .unwrap_or("desktop")
+                            .to_string();
 
-                            let peer = DiscoveredPeer {
-                                id: peer_id.clone(),
-                                alias: peer_alias,
-                                device_type: peer_dtype,
-                                ip,
-                                port: info.get_port(),
-                            };
-
-                            let mut peers = peers_mdns.lock().await;
-                            peers.insert(peer_id.clone(), peer.clone());
-                            drop(peers);
-
-                            let _ = handle_mdns.emit("lan_peer_discovered", &peer);
+                        // Skip our own service
+                        if peer_id == my_id_mdns || peer_id.is_empty() {
+                            continue;
                         }
-                        ServiceEvent::ServiceRemoved(_, fullname) => {
-                            // DON'T immediately remove — schedule a pending removal.
-                            // mDNS ServiceRemoved is unreliable on Windows.
-                            let peers = peers_mdns.lock().await;
-                            let found = peers
-                                .iter()
-                                .find(|(_, p)| fullname.contains(&p.id[..8]))
-                                .map(|(id, p)| (id.clone(), p.ip.clone(), p.port));
-                            drop(peers);
 
-                            if let Some((id, ip, port)) = found {
-                                let mut pending = pending_mdns.lock().await;
-                                pending.insert(id.clone(), (Instant::now(), ip, port));
+                        // Get the first IPv4 address
+                        let ip = info
+                            .get_addresses()
+                            .iter()
+                            .find(|a| a.is_ipv4())
+                            .map(|a| a.to_string())
+                            .unwrap_or_default();
+
+                        if ip.is_empty() {
+                            continue;
+                        }
+
+                        // Cancel any pending removal — peer is alive
+                        {
+                            let mut pending = pending_mdns.lock().await;
+                            if pending.remove(&peer_id).is_some() {
                                 emit_log(
                                     &handle_mdns,
                                     "info",
                                     &format!(
-                                        "mDNS removal for {} — verifying in {}s...",
-                                        &id[..8],
-                                        grace_period.as_secs()
+                                        "Cancelled pending removal for {} (re-discovered)",
+                                        &peer_id[..8]
                                     ),
                                 );
                             }
                         }
-                        _ => {}
+
+                        let peer = DiscoveredPeer {
+                            id: peer_id.clone(),
+                            alias: peer_alias,
+                            device_type: peer_dtype,
+                            ip,
+                            port: info.get_port(),
+                        };
+
+                        let mut peers = peers_mdns.lock().await;
+                        peers.insert(peer_id.clone(), peer.clone());
+                        drop(peers);
+
+                        let _ = handle_mdns.emit("lan_peer_discovered", &peer);
                     }
+                    ServiceEvent::ServiceRemoved(_, fullname) => {
+                        // DON'T immediately remove — schedule a pending removal.
+                        // mDNS ServiceRemoved is unreliable on Windows.
+                        let peers = peers_mdns.lock().await;
+                        let found = peers
+                            .iter()
+                            .find(|(_, p)| fullname.contains(&p.id[..8]))
+                            .map(|(id, p)| (id.clone(), p.ip.clone(), p.port));
+                        drop(peers);
+
+                        if let Some((id, ip, port)) = found {
+                            let mut pending = pending_mdns.lock().await;
+                            pending.insert(id.clone(), (Instant::now(), ip, port));
+                            emit_log(
+                                &handle_mdns,
+                                "info",
+                                &format!(
+                                    "mDNS removal for {} — verifying in {}s...",
+                                    &id[..8],
+                                    grace_period.as_secs()
+                                ),
+                            );
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {} // Timeout or channel error — loop continues
             }
         }
     });

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 export interface StatusResponse {
@@ -22,6 +22,11 @@ export interface DeviceIdentity {
   id: string;
   alias: string;
   device_type: string;
+}
+
+export interface ReceiveFolderSettings {
+  default_out_folder: string;
+  peer_folders: Record<string, string>;
 }
 
 export interface DiscoveredPeer {
@@ -57,6 +62,14 @@ export async function lanSendFiles(peerId: string, paths: string[], peerIp?: str
 
 export async function setDefaultOutFolder(folder: string): Promise<void> {
   return invoke("set_default_out_folder", { folder });
+}
+
+export async function setPeerOutFolder(peerId: string, folder: string): Promise<void> {
+  return invoke("set_peer_out_folder", { peerId, folder });
+}
+
+export async function getReceiveFolderSettings(): Promise<ReceiveFolderSettings> {
+  return invoke<ReceiveFolderSettings>("get_receive_folder_settings");
 }
 
 export async function setDeviceAlias(alias: string): Promise<void> {

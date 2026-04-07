@@ -35,6 +35,7 @@ export interface MessageAttachment {
   size?: string;
   type: "image" | "video" | "file" | "folder";
   fileCount?: number;
+  children?: MessageAttachment[];
 }
 
 export interface MessageEntry {
@@ -78,6 +79,18 @@ export interface HotkeySettings {
 
 const DEFAULT_HOTKEYS: HotkeySettings = { quickSend: "F3", enabled: false };
 
+export interface PersistedAppState {
+  version: number;
+  devices: DiscoveredDevice[];
+  activeDeviceId: string | null;
+  activity: ActivityEntry[];
+  messages: MessageEntry[];
+  notificationsEnabled: boolean;
+  popOnReceive: boolean;
+  receiveOptions: ReceiveOptions;
+  hotkeys: HotkeySettings;
+}
+
 function loadJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -104,19 +117,6 @@ function loadString(key: string): string | null {
   }
 }
 
-function saveJson(key: string, data: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(data));
-  } catch {}
-}
-
-function saveString(key: string, value: string | null): void {
-  try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, value);
-  } catch {}
-}
-
 export interface ReceiveOptions {
   outFolder?: string;
   overwrite?: boolean;
@@ -126,8 +126,8 @@ class AppState {
   activeView = $state<"transfer" | "settings">("transfer");
 
   // Devices (auto-discovered + persisted)
-  devices = $state<DiscoveredDevice[]>(loadArray<DiscoveredDevice>(DEVICES_KEY));
-  activeDeviceId = $state<string | null>(loadString(ACTIVE_DEVICE_KEY));
+  devices = $state<DiscoveredDevice[]>([]);
+  activeDeviceId = $state<string | null>(null);
 
   // Files
   files = $state<SelectedFile[]>([]);
@@ -141,18 +141,18 @@ class AppState {
 
   // Logs, activity, messages
   logs = $state<LogEntry[]>([]);
-  activity = $state<ActivityEntry[]>(loadArray<ActivityEntry>(ACTIVITY_KEY));
-  messages = $state<MessageEntry[]>(loadArray<MessageEntry>(MESSAGES_KEY));
+  activity = $state<ActivityEntry[]>([]);
+  messages = $state<MessageEntry[]>([]);
 
   // Message search & filter
   messageSearch = $state("");
   messageViewAll = $state(false);
 
   // Settings
-  notificationsEnabled = $state<boolean>(loadJson<{ n: boolean }>(SETTINGS_KEY, { n: true }).n);
-  popOnReceive = $state<boolean>(loadJson<{ pop: boolean }>(SETTINGS_KEY, { pop: false }).pop);
-  receiveOptions = $state<ReceiveOptions>(loadJson(RECEIVE_KEY, {}));
-  hotkeys = $state<HotkeySettings>(loadJson(HOTKEYS_KEY, DEFAULT_HOTKEYS));
+  notificationsEnabled = $state<boolean>(true);
+  popOnReceive = $state<boolean>(false);
+  receiveOptions = $state<ReceiveOptions>({});
+  hotkeys = $state<HotkeySettings>({ ...DEFAULT_HOTKEYS });
 
   // Derived
   get activeDevice(): DiscoveredDevice | null {
@@ -220,32 +220,23 @@ class AppState {
     this.devices = this.devices.map((d) =>
       d.id === id ? { ...d, online: false } : d
     );
-    this._saveDevices();
   }
 
   setActiveDevice(id: string | null) {
     this.activeDeviceId = id;
-    saveString(ACTIVE_DEVICE_KEY, id);
   }
 
   updateDeviceSettings(id: string, updates: Partial<Pick<DiscoveredDevice, "color" | "outFolder">>) {
     this.devices = this.devices.map((d) =>
       d.id === id ? { ...d, ...updates } : d
     );
-    this._saveDevices();
   }
 
   removeDevice(id: string) {
     this.devices = this.devices.filter((d) => d.id !== id);
     if (this.activeDeviceId === id) {
       this.activeDeviceId = this.devices[0]?.id ?? null;
-      saveString(ACTIVE_DEVICE_KEY, this.activeDeviceId);
     }
-    this._saveDevices();
-  }
-
-  private _saveDevices() {
-    saveJson(DEVICES_KEY, this.devices);
   }
 
   // ── Files ──
@@ -283,16 +274,10 @@ class AppState {
       { ...entry, id: crypto.randomUUID(), timestamp: new Date().toISOString() },
     ];
     if (this.activity.length > 200) this.activity = this.activity.slice(-200);
-    this._saveActivity();
   }
 
   clearActivity() {
     this.activity = [];
-    this._saveActivity();
-  }
-
-  private _saveActivity() {
-    saveJson(ACTIVITY_KEY, this.activity);
   }
 
   // ── Messages ──
@@ -303,7 +288,6 @@ class AppState {
       { ...entry, id: crypto.randomUUID(), timestamp: new Date().toISOString() },
     ];
     this._pruneMessages();
-    this._saveMessages();
   }
 
   getPeerMessages(peerId: string): MessageEntry[] {
@@ -330,23 +314,49 @@ class AppState {
     this.messages = this.messages.map((m) =>
       m.id === messageId ? { ...m, starred: !m.starred } : m
     );
-    this._saveMessages();
+  }
+
+  updateAttachmentPath(messageId: string, oldPath: string, newPath: string) {
+    let changed = false;
+    this.messages = this.messages.map((m) => {
+      if (m.id !== messageId || !m.attachments?.length) return m;
+
+      const attachments = m.attachments.map((attachment) => {
+        const nextChildren = attachment.children?.map((child) => {
+          if (child.path !== oldPath) return child;
+          changed = true;
+          return { ...child, path: newPath };
+        });
+
+        if (attachment.path === oldPath) {
+          changed = true;
+          return { ...attachment, path: newPath, children: nextChildren };
+        }
+
+        if (nextChildren) {
+          return { ...attachment, children: nextChildren };
+        }
+
+        return attachment;
+      });
+
+      return changed ? { ...m, attachments } : m;
+    });
+
+    if (changed) this.messages = [...this.messages];
   }
 
   clearMessages(peerId: string) {
     this.messages = this.messages.filter((m) => m.peerId !== peerId || m.starred);
-    this._saveMessages();
   }
 
   deleteAllMessages(peerId: string) {
     this.messages = this.messages.filter((m) => m.peerId !== peerId);
-    this._saveMessages();
   }
 
   deleteOldMessages(daysOld: number) {
     const cutoff = new Date(Date.now() - daysOld * 86400000).toISOString();
     this.messages = this.messages.filter((m) => m.starred || m.timestamp >= cutoff);
-    this._saveMessages();
   }
 
   private _pruneMessages() {
@@ -359,30 +369,96 @@ class AppState {
     );
   }
 
-  private _saveMessages() {
-    saveJson(MESSAGES_KEY, this.messages);
-  }
-
   // ── Settings ──
 
   setNotifications(enabled: boolean) {
     this.notificationsEnabled = enabled;
-    saveJson(SETTINGS_KEY, { n: enabled, pop: this.popOnReceive });
   }
 
   setPopOnReceive(enabled: boolean) {
     this.popOnReceive = enabled;
-    saveJson(SETTINGS_KEY, { n: this.notificationsEnabled, pop: enabled });
   }
 
   updateReceiveOption<K extends keyof ReceiveOptions>(key: K, value: ReceiveOptions[K]) {
     this.receiveOptions = { ...this.receiveOptions, [key]: value };
-    saveJson(RECEIVE_KEY, this.receiveOptions);
   }
 
   updateHotkeys(updates: Partial<HotkeySettings>) {
     this.hotkeys = { ...this.hotkeys, ...updates };
-    saveJson(HOTKEYS_KEY, this.hotkeys);
+  }
+
+  hydratePersistedState(snapshot: PersistedAppState) {
+    this.devices = Array.isArray(snapshot.devices) ? snapshot.devices : [];
+    this.activeDeviceId = snapshot.activeDeviceId ?? null;
+    this.activity = Array.isArray(snapshot.activity) ? snapshot.activity : [];
+    this.messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+    this.notificationsEnabled = snapshot.notificationsEnabled ?? true;
+    this.popOnReceive = snapshot.popOnReceive ?? false;
+    this.receiveOptions = snapshot.receiveOptions ?? {};
+    this.hotkeys = { ...DEFAULT_HOTKEYS, ...(snapshot.hotkeys ?? {}) };
+  }
+
+  exportPersistedState(): PersistedAppState {
+    return {
+      version: 1,
+      devices: this.devices,
+      activeDeviceId: this.activeDeviceId,
+      activity: this.activity,
+      messages: this.messages,
+      notificationsEnabled: this.notificationsEnabled,
+      popOnReceive: this.popOnReceive,
+      receiveOptions: this.receiveOptions,
+      hotkeys: this.hotkeys,
+    };
+  }
+
+  loadLegacyPersistedState(): PersistedAppState | null {
+    const devices = loadArray<DiscoveredDevice>(DEVICES_KEY);
+    const activeDeviceId = loadString(ACTIVE_DEVICE_KEY);
+    const activity = loadArray<ActivityEntry>(ACTIVITY_KEY);
+    const messages = loadArray<MessageEntry>(MESSAGES_KEY);
+    const notifications = loadJson<{ n: boolean }>(SETTINGS_KEY, { n: true });
+    const popOnReceive = loadJson<{ pop: boolean }>(SETTINGS_KEY, { pop: false });
+    const receiveOptions = loadJson<ReceiveOptions>(RECEIVE_KEY, {});
+    const hotkeys = loadJson<HotkeySettings>(HOTKEYS_KEY, DEFAULT_HOTKEYS);
+
+    const hasLegacyState = devices.length > 0
+      || activity.length > 0
+      || messages.length > 0
+      || activeDeviceId !== null
+      || loadString(SETTINGS_KEY) !== null
+      || loadString(RECEIVE_KEY) !== null
+      || loadString(HOTKEYS_KEY) !== null;
+
+    if (!hasLegacyState) return null;
+
+    return {
+      version: 1,
+      devices,
+      activeDeviceId,
+      activity,
+      messages,
+      notificationsEnabled: notifications.n,
+      popOnReceive: popOnReceive.pop,
+      receiveOptions,
+      hotkeys,
+    };
+  }
+
+  clearLegacyPersistedState() {
+    try {
+      for (const key of [
+        DEVICES_KEY,
+        ACTIVE_DEVICE_KEY,
+        MESSAGES_KEY,
+        ACTIVITY_KEY,
+        SETTINGS_KEY,
+        RECEIVE_KEY,
+        HOTKEYS_KEY,
+      ]) {
+        localStorage.removeItem(key);
+      }
+    } catch {}
   }
 }
 

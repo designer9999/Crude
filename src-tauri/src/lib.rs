@@ -23,9 +23,10 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init());
 
@@ -54,6 +55,10 @@ pub fn run() {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
+
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_window_state::Builder::default().build())?;
 
             // Auto-add Windows Firewall rule so other devices can connect to us
             #[cfg(target_os = "windows")]
@@ -180,6 +185,7 @@ pub fn run() {
             commands::lan_send_files,
             commands::set_default_out_folder,
             commands::set_peer_out_folder,
+            commands::get_receive_folder_settings,
             commands::set_device_alias,
             commands::get_device_identity,
             commands::get_file_info,

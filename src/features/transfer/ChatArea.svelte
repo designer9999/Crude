@@ -6,7 +6,7 @@
   import Icon from "$lib/ui/Icon.svelte";
   import TextField from "$lib/ui/TextField.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { pickFiles, pickFolder, getFileInfo, copyToClipboard, getThumbnail, getFullImage, readFilePreview, onDragDrop, isMobile, getContentFileName, revokeBlobUrl } from "$lib/api/bridge";
+  import { pickFiles, pickFolder, getFileInfo, copyToClipboard, getThumbnail, getFullImage, readFilePreview, onDragDrop, isMobile, getContentFileName, revokeBlobUrl, openFile } from "$lib/api/bridge";
   import type { FilePreview } from "$lib/api/bridge";
   import { isImage } from "$lib/utils/file-utils";
   import { onMount } from "svelte";
@@ -119,6 +119,11 @@
       if (!msg.attachments) continue;
       for (const att of msg.attachments) {
         if (att.type === "image" && att.path) loadThumb(att.path);
+        if (att.type === "folder" && att.children?.length) {
+          for (const child of att.children) {
+            if (child.type === "image" && child.path) loadThumb(child.path);
+          }
+        }
       }
     }
     for (const file of app.files) {
@@ -191,6 +196,19 @@
   async function handlePickFolder() {
     const result = await pickFolder();
     if (result && result.length > 0) await addPaths(result);
+  }
+
+  async function openDefaultSaveFolder() {
+    const folder = app.receiveOptions.outFolder?.trim();
+    if (!folder) {
+      onsnackbar?.("Set a default save folder in Settings first");
+      return;
+    }
+    try {
+      await openFile(folder);
+    } catch {
+      onsnackbar?.("Couldn't open the default save folder");
+    }
   }
 
   function handleSend() {
@@ -281,6 +299,14 @@
       </button>
 
       <span class="flex-1"></span>
+
+      <button
+        class="toolbar-icon"
+        onclick={openDefaultSaveFolder}
+        title="Open default save folder"
+      >
+        <Icon name="folder_open" size={15} />
+      </button>
 
       <button
         class="toolbar-icon"

@@ -5,7 +5,7 @@
   import Icon from "$lib/ui/Icon.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
   import { showInExplorer, openFile, downloadFile, isMobile, getVideoSrc, revokeBlobUrl } from "$lib/api/bridge";
-  import type { MessageEntry } from "$lib/state/app-state.svelte";
+  import type { MessageAttachment, MessageEntry } from "$lib/state/app-state.svelte";
   import { onDestroy } from "svelte";
 
   interface Props {
@@ -111,6 +111,10 @@
   function formatTime(ts: string): string {
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
+
+  function getFolderPreviewItems(file: MessageAttachment) {
+    return (file.children ?? []).slice(0, 3);
+  }
 </script>
 
 <div
@@ -200,11 +204,29 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           {#if file.type === "folder"}
-            <div class="att-file-card" onclick={(e) => { e.stopPropagation(); mobile ? openFile(file.path) : showInExplorer(file.path); }} title={mobile ? "Open" : "Open folder"}>
+            <div class="att-file-card" onclick={(e) => { e.stopPropagation(); openFile(file.path); }} title="Open folder">
               <Icon name="folder" size={18} />
               <span class="att-file-name">{file.name}</span>
               {#if file.size}<span class="att-file-size">{file.size}</span>{/if}
               <span class="att-file-badge">{file.fileCount} {file.fileCount === 1 ? 'FILE' : 'FILES'}</span>
+              {#if file.children?.length}
+                <div class="att-folder-preview" aria-hidden="true">
+                  {#each getFolderPreviewItems(file) as child}
+                    <div class="att-folder-preview-item">
+                      {#if child.type === "image" && thumbCache[child.path]}
+                        <img src={thumbCache[child.path]} alt="" class="att-folder-preview-thumb" />
+                      {:else if child.type === "video"}
+                        <span class="att-folder-preview-icon"><Icon name="play_arrow" size={14} /></span>
+                      {:else}
+                        <span class="att-folder-preview-icon"><Icon name="description" size={14} /></span>
+                      {/if}
+                    </div>
+                  {/each}
+                  {#if file.children.length > 3}
+                    <span class="att-folder-preview-more">+{file.children.length - 3}</span>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {:else}
             {@const ext = file.name.split('.').pop()?.toUpperCase() ?? 'FILE'}
@@ -532,5 +554,42 @@
     width: fit-content;
     background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
     color: var(--md-sys-color-on-surface-variant);
+  }
+  .att-folder-preview {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 8px;
+    min-height: 22px;
+  }
+  .att-folder-preview-item {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .att-folder-preview-thumb {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .att-folder-preview-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--md-sys-color-on-surface-variant);
+  }
+  .att-folder-preview-more {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface-variant);
+    opacity: 0.75;
+    margin-left: 2px;
   }
 </style>
