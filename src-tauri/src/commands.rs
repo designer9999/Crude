@@ -49,6 +49,15 @@ pub async fn stop_lan_service(state: State<'_, LanState>) -> Result<(), String> 
     Ok(())
 }
 
+/// Force a fresh mDNS scan by restarting the discovery service.
+/// Useful when peers can't find each other due to lost multicast packets.
+#[tauri::command]
+pub async fn refresh_lan_discovery(state: State<'_, LanState>) -> Result<(), String> {
+    state.service.stop().await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    state.service.start().await
+}
+
 #[tauri::command]
 pub async fn lan_send_text(
     peer_id: String,
@@ -192,18 +201,27 @@ pub async fn show_in_explorer(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let canonical = target.canonicalize().unwrap_or(target.clone());
-        let mut command = std::process::Command::new("explorer");
+        use std::os::windows::process::CommandExt;
+        // Strip UNC prefix (\\?\) from canonicalized paths — Explorer can't handle them
+        let path_str = target.canonicalize().ok()
+            .map(|p| {
+                let s = p.to_string_lossy().to_string();
+                s.strip_prefix(r"\\?\").map(|s| s.to_string()).unwrap_or(s)
+            })
+            .unwrap_or_else(|| target.to_string_lossy().to_string());
 
-        if canonical.is_file() {
-            // /select,<path> opens the parent folder and highlights the file.
-            let select_arg = format!("/select,{}", canonical.to_string_lossy());
-            command.arg(select_arg);
+        if target.is_file() {
+            // /select, must be one comma-separated argument
+            std::process::Command::new("explorer")
+                .raw_arg(format!("/select,\"{}\"", path_str))
+                .spawn()
+                .map_err(|e| e.to_string())?;
         } else {
-            command.arg(canonical.to_string_lossy().to_string());
+            std::process::Command::new("explorer")
+                .arg(&path_str)
+                .spawn()
+                .map_err(|e| e.to_string())?;
         }
-
-        command.spawn().map_err(|e| e.to_string())?;
     }
 
     #[cfg(target_os = "macos")]

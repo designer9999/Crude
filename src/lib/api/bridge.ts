@@ -48,6 +48,10 @@ export async function startLanService(): Promise<void> {
   return invoke("start_lan_service");
 }
 
+export async function refreshLanDiscovery(): Promise<void> {
+  return invoke("refresh_lan_discovery");
+}
+
 export async function lanSendText(peerId: string, text: string, peerIp?: string): Promise<boolean> {
   return invoke<boolean>("lan_send_text", { peerId, text, peerIp });
 }

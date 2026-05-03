@@ -223,6 +223,11 @@ class AppState {
     );
   }
 
+  /** Clear all offline devices (used by refresh button) */
+  clearOfflineDevices() {
+    this.devices = this.devices.filter((d) => d.online);
+  }
+
   setActiveDevice(id: string | null) {
     this.activeDeviceId = id;
   }

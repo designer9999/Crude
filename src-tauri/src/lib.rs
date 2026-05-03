@@ -181,6 +181,7 @@ pub fn run() {
             commands::get_status,
             commands::start_lan_service,
             commands::stop_lan_service,
+            commands::refresh_lan_discovery,
             commands::lan_send_text,
             commands::lan_send_files,
             commands::set_default_out_folder,

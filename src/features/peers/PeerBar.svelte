@@ -3,6 +3,7 @@
 -->
 <script lang="ts">
   import { getAppState } from "$lib/state/app-state.svelte";
+  import { refreshLanDiscovery } from "$lib/api/bridge";
   import IconButton from "$lib/ui/IconButton.svelte";
   import Icon from "$lib/ui/Icon.svelte";
   import PeerChip from "./PeerChip.svelte";
@@ -33,6 +34,18 @@
     app.devices.length;
     requestAnimationFrame(checkScroll);
   });
+
+  let refreshing = $state(false);
+  async function handleRefresh() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      // Clear stale devices so users see fresh state
+      app.clearOfflineDevices?.();
+      await refreshLanDiscovery();
+    } catch {}
+    setTimeout(() => { refreshing = false; }, 1500);
+  }
 </script>
 
 <div class="peer-bar-outer">
@@ -74,6 +87,10 @@
       <Icon name="chevron_right" size={18} />
     </button>
   {/if}
+
+  <button class="refresh-btn" class:refreshing onclick={handleRefresh} title="Rescan for devices" disabled={refreshing}>
+    <Icon name="refresh" size={16} />
+  </button>
 </div>
 
 <style>
@@ -81,7 +98,27 @@
     position: relative;
     width: 100%;
     overflow: hidden;
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
+  .refresh-btn {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+    transition: background var(--md-spring-fast-effects-dur) var(--md-spring-fast-effects);
+  }
+  .refresh-btn:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+  .refresh-btn.refreshing { animation: spin 0.8s linear infinite; color: var(--md-sys-color-primary); }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .peer-bar {
     display: flex;
     align-items: center;
