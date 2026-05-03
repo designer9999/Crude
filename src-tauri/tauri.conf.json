@@ -1,6 +1,6 @@
 {
   "productName": "LanDrop",
-  "version": "1.4.5",
+  "version": "1.5.0",
   "identifier": "com.landrop.app",
   "build": {
     "frontendDist": "../dist",
@@ -35,7 +35,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": ["nsis", "appimage", "deb"],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",

@@ -50,6 +50,55 @@ jobs:
           releaseDraft: false
           prerelease: false
 
+  build-linux:
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libayatana-appindicator3-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          cache-on-failure: true
+          shared-key: "tauri-linux"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "LanDrop ${{ github.ref_name }}"
+          releaseBody: |
+            See the [changelog](https://github.com/designer9999/LanDrop/commits/${{ github.ref_name }}) for details.
+
+            ## Installation
+            - **Windows**: Download and run the `.exe` installer
+            - **Linux**: Download the `.AppImage` (works on any distro including Arch) or `.deb` for Debian/Ubuntu
+          releaseDraft: false
+          prerelease: false
+
   # Android build — uncomment when needed
   # build-android:
   #   permissions:
