@@ -12,15 +12,21 @@ static QUITTING: AtomicBool = AtomicBool::new(false);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Linux Wayland fix: WebKitGTK's DMA-BUF renderer crashes on NVIDIA + Wayland.
-    // Disable it BEFORE WebKit initializes — keeps native Wayland (sharp fractional
-    // scaling) while avoiding the crash. Users on Intel/AMD GPUs are unaffected.
+    // Linux Wayland: force native Wayland backend for sharp fractional scaling.
+    // WebKitGTK's DMA-BUF renderer crashes on NVIDIA + Wayland — disable it.
     #[cfg(target_os = "linux")]
     {
-        if std::env::var("WAYLAND_DISPLAY").is_ok()
-            && std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err()
-        {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok()
+            || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false);
+        if is_wayland {
+            if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
+                std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            }
+            // Force native Wayland backend (otherwise GDK may fall back to XWayland,
+            // which causes blurry rendering at fractional scales like 1.25)
+            if std::env::var("GDK_BACKEND").is_err() {
+                std::env::set_var("GDK_BACKEND", "wayland");
+            }
         }
     }
 
