@@ -50,6 +50,64 @@ jobs:
           releaseDraft: false
           prerelease: false
 
+  build-macos:
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: arm64
+          - target: x86_64-apple-darwin
+            arch: x64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          cache-on-failure: true
+          shared-key: "tauri-macos-${{ matrix.arch }}"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "LanDrop ${{ github.ref_name }}"
+          releaseBody: |
+            See the [changelog](https://github.com/designer9999/LanDrop/commits/${{ github.ref_name }}) for details.
+
+            ## Installation
+            - **Windows**: Download and run the `.exe` installer
+            - **macOS**: Download `.dmg` (arm64 for Apple Silicon, x64 for Intel)
+            - **Linux**: Download `.AppImage` (works on any distro including Arch) or `.deb`
+
+            **macOS first run**: If you see "LanDrop is damaged", run in terminal:
+            `xattr -cr /Applications/LanDrop.app`
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.target }}
+
   build-linux:
     permissions:
       contents: write
