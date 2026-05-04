@@ -14,19 +14,18 @@ static QUITTING: AtomicBool = AtomicBool::new(false);
 pub fn run() {
     // Linux Wayland: force native Wayland backend for sharp fractional scaling.
     // WebKitGTK's DMA-BUF renderer crashes on NVIDIA + Wayland — disable it.
+    //
+    // NOTE: AppImage's linuxdeploy-plugin-gtk hook exports GDK_BACKEND=x11 BEFORE
+    // this binary runs. We must FORCE-override when on a Wayland session, ignoring
+    // whatever the AppRun script set.
     #[cfg(target_os = "linux")]
     {
         let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok()
             || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false);
         if is_wayland {
-            if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-                std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            }
-            // Force native Wayland backend (otherwise GDK may fall back to XWayland,
-            // which causes blurry rendering at fractional scales like 1.25)
-            if std::env::var("GDK_BACKEND").is_err() {
-                std::env::set_var("GDK_BACKEND", "wayland");
-            }
+            // Always set, even if AppImage hook set it to x11
+            std::env::set_var("GDK_BACKEND", "wayland");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
     }
 
