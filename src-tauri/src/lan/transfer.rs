@@ -605,6 +605,17 @@ fn dirs_next_downloads() -> String {
             if let Some(downloads) = user_dirs.download_dir() {
                 return downloads.to_string_lossy().to_string();
             }
+            // Linux fallback: ~/Downloads if XDG_DOWNLOAD_DIR isn't set
+            // (xdg-user-dirs isn't installed on minimal distros like Arch)
+            let fallback = user_dirs.home_dir().join("Downloads");
+            let _ = std::fs::create_dir_all(&fallback);
+            return fallback.to_string_lossy().to_string();
+        }
+        // Last resort: HOME env var (current_dir is read-only inside AppImage mount)
+        if let Ok(home) = std::env::var("HOME") {
+            let fallback = std::path::PathBuf::from(home).join("Downloads");
+            let _ = std::fs::create_dir_all(&fallback);
+            return fallback.to_string_lossy().to_string();
         }
         std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
