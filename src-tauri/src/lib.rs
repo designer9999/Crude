@@ -12,6 +12,18 @@ static QUITTING: AtomicBool = AtomicBool::new(false);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Linux Wayland fix: WebKitGTK's DMA-BUF renderer crashes on NVIDIA + Wayland.
+    // Disable it BEFORE WebKit initializes — keeps native Wayland (sharp fractional
+    // scaling) while avoiding the crash. Users on Intel/AMD GPUs are unaffected.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("WAYLAND_DISPLAY").is_ok()
+            && std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err()
+        {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     let mut builder = tauri::Builder::default()
         // Single instance — must be first plugin. If app is already running,
         // focus the existing window instead of opening a second instance.
