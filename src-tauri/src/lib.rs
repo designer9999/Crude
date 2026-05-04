@@ -73,9 +73,26 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
+            // Window state — skip on Wayland (compositors like Hyprland/Sway don't
+            // support saving window position, so the plugin just thrashes for nothing)
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_window_state::Builder::default().build())?;
+            {
+                let skip_window_state = {
+                    #[cfg(target_os = "linux")]
+                    {
+                        std::env::var("WAYLAND_DISPLAY").is_ok()
+                            || std::env::var("XDG_SESSION_TYPE")
+                                .map(|v| v == "wayland")
+                                .unwrap_or(false)
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    { false }
+                };
+                if !skip_window_state {
+                    app.handle()
+                        .plugin(tauri_plugin_window_state::Builder::default().build())?;
+                }
+            }
 
             // Auto-add Windows Firewall rule so other devices can connect to us
             #[cfg(target_os = "windows")]
@@ -127,7 +144,6 @@ pub fn run() {
             // ── System Tray (desktop only) ──
             #[cfg(desktop)]
             {
-                use tauri::image::Image;
                 use tauri::menu::{MenuBuilder, MenuItemBuilder};
                 use tauri::tray::TrayIconBuilder;
 
@@ -139,10 +155,11 @@ pub fn run() {
                     .item(&quit)
                     .build()?;
 
+                // Use embedded window icon — file paths break in AppImage (read-only mount)
                 let icon = app
                     .default_window_icon()
                     .cloned()
-                    .unwrap_or_else(|| Image::from_path("icons/32x32.png").expect("tray icon"));
+                    .ok_or("No bundled window icon — tray cannot start")?;
 
                 let _tray = TrayIconBuilder::with_id("main-tray")
                     .icon(icon)
@@ -211,6 +228,7 @@ pub fn run() {
             commands::show_in_explorer,
             commands::get_thumbnail,
             commands::get_local_ip,
+            commands::get_platform_info,
             commands::save_clipboard_image,
             commands::get_clipboard_files,
             commands::read_file_preview,

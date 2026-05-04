@@ -24,6 +24,17 @@ export interface DeviceIdentity {
   device_type: string;
 }
 
+export interface PlatformInfo {
+  os: string;
+  is_wayland: boolean;
+  supports_global_hotkeys: boolean;
+  supports_window_state_persistence: boolean;
+}
+
+export async function getPlatformInfo(): Promise<PlatformInfo> {
+  return invoke<PlatformInfo>("get_platform_info");
+}
+
 export interface ReceiveFolderSettings {
   default_out_folder: string;
   peer_folders: Record<string, string>;

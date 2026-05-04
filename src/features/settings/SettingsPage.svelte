@@ -9,7 +9,7 @@
   import Slider from "$lib/ui/Slider.svelte";
   import TextField from "$lib/ui/TextField.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { pickSaveFolder, copyToClipboard, setMica, getDeviceIdentity, setDeviceAlias, isMobile } from "$lib/api/bridge";
+  import { pickSaveFolder, copyToClipboard, setMica, getDeviceIdentity, setDeviceAlias, isMobile, getPlatformInfo, type PlatformInfo } from "$lib/api/bridge";
   import { playReceiveSound } from "$lib/utils/notification-sound";
   import { getThemeState } from "$lib/theme/theme-store.svelte";
   import { VARIANT_INFO, PRESET_COLORS, type SchemeVariant } from "$lib/theme/m3-color";
@@ -38,6 +38,7 @@
   let deviceAlias = $state("");
   let deviceId = $state("");
   let aliasEditing = $state(false);
+  let platform = $state<PlatformInfo | null>(null);
 
   import { onMount } from "svelte";
   onMount(async () => {
@@ -45,6 +46,9 @@
       const identity = await getDeviceIdentity();
       deviceAlias = identity.alias;
       deviceId = identity.id;
+    } catch {}
+    try {
+      platform = await getPlatformInfo();
     } catch {}
   });
 
@@ -414,9 +418,19 @@
     <div class="flex items-center justify-between py-1 mt-3">
       <div>
         <div class="text-sm text-on-surface">Enable hotkeys</div>
-        <div class="text-xs text-on-surface-variant">System-wide shortcuts even when minimized</div>
+        <div class="text-xs text-on-surface-variant">
+          {#if platform && !platform.supports_global_hotkeys}
+            Not supported on Wayland (compositor security blocks global shortcuts)
+          {:else}
+            System-wide shortcuts even when minimized
+          {/if}
+        </div>
       </div>
-      <Switch checked={app.hotkeys.enabled} onchange={(v) => app.updateHotkeys({ enabled: v })} />
+      <Switch
+        checked={app.hotkeys.enabled && (platform?.supports_global_hotkeys ?? true)}
+        disabled={platform ? !platform.supports_global_hotkeys : false}
+        onchange={(v) => app.updateHotkeys({ enabled: v })}
+      />
     </div>
     {#if app.hotkeys.enabled}
       <div class="mt-3 flex items-center gap-3">

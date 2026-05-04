@@ -123,11 +123,21 @@ pub async fn run_discovery(
             d
         }
         Err(e) => {
-            emit_log(
-                &handle,
-                "error",
-                &format!("Failed to create mDNS daemon: {}", e),
-            );
+            let err_msg = format!("Failed to create mDNS daemon: {}", e);
+            emit_log(&handle, "error", &err_msg);
+
+            // Linux-specific diagnostics: common causes are firewall blocking
+            // UDP 5353 or NetworkManager not enabling mDNS per connection.
+            #[cfg(target_os = "linux")]
+            {
+                emit_log(
+                    &handle,
+                    "warn",
+                    "Linux mDNS troubleshooting: ensure UDP port 5353 is allowed \
+                     by your firewall (ufw/firewalld), and that NetworkManager \
+                     has connection.mdns=2 (or install avahi-daemon).",
+                );
+            }
             running.store(false, Ordering::SeqCst);
             return;
         }

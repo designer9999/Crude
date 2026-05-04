@@ -423,6 +423,31 @@ pub async fn receive_file(
     }
 
     file.flush().await.map_err(|e| e.to_string())?;
+
+    // On Unix, set executable bit on common script/binary types so users can run
+    // received scripts. Default tokio File create gives 0644 which strips +x.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let exec_exts = ["sh", "bash", "zsh", "fish", "py", "pl", "rb", "AppImage", "appimage"];
+        let is_executable = out_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| exec_exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
+            .unwrap_or(false)
+            || out_path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.eq_ignore_ascii_case("AppImage"))
+                .unwrap_or(false);
+        if is_executable {
+            if let Ok(meta) = tokio::fs::metadata(&out_path).await {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = tokio::fs::set_permissions(&out_path, perms).await;
+            }
+        }
+    }
+
     Ok(out_path.to_string_lossy().to_string())
 }
 
@@ -502,7 +527,18 @@ pub async fn receive_batch(
 // ─── Utility functions ───
 
 fn sanitize_path(name: &str) -> String {
-    let cleaned = name.replace('\\', "/").trim_start_matches('/').to_string();
+    // Strip Windows drive letters (C:\...), UNC prefixes (\\server\), and
+    // leading slashes/tildes so path is always relative to the receive dir.
+    let mut cleaned = name.replace('\\', "/");
+    // Drive letter or UNC: strip everything up to the first useful component
+    if cleaned.len() > 1 && cleaned.chars().nth(1) == Some(':') {
+        cleaned = cleaned[2..].to_string(); // C:/foo → /foo
+    }
+    let cleaned = cleaned
+        .trim_start_matches('/')
+        .trim_start_matches('~')
+        .trim_start_matches('/')
+        .to_string();
 
     let parts: Vec<&str> = cleaned
         .split('/')
@@ -560,7 +596,28 @@ fn check_disk_space(path: &Path, needed: u64) -> Result<(), String> {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::ffi::CString;
+        let dir = path.parent().unwrap_or(path);
+        let dir_str = dir.to_string_lossy().to_string();
+        if let Ok(c_path) = CString::new(dir_str) {
+            let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+            let result = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
+            if result == 0 {
+                let free_bytes = stat.f_bavail as u64 * stat.f_frsize as u64;
+                if free_bytes < needed + 10_000_000 {
+                    return Err(format!(
+                        "Not enough disk space. Need {} but only {} available",
+                        format_size(needed),
+                        format_size(free_bytes)
+                    ));
+                }
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         let _ = (path, needed);
     }

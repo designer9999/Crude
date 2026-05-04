@@ -228,16 +228,55 @@ pub async fn show_in_explorer(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open")
-            .arg(target.to_string_lossy().to_string())
-            .spawn();
+        let path_str = target.to_string_lossy().to_string();
+        if target.is_file() {
+            // -R reveals (selects) the file in Finder
+            let _ = std::process::Command::new("open")
+                .args(["-R", &path_str])
+                .spawn();
+        } else {
+            let _ = std::process::Command::new("open").arg(&path_str).spawn();
+        }
     }
 
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(target.to_string_lossy().to_string())
-            .spawn();
+        let path_str = target.to_string_lossy().to_string();
+
+        if target.is_file() {
+            // Build proper file:// URI with path encoding (spaces → %20, etc.)
+            let encoded = path_str
+                .split('/')
+                .map(|seg| urlencoding::encode(seg).into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            let uri = format!("file://{}", encoded);
+
+            // Try freedesktop FileManager1 D-Bus interface (works with Nautilus,
+            // Nemo, Caja, Dolphin, Thunar, PCManFM — all major Linux file managers)
+            let dbus_result = std::process::Command::new("dbus-send")
+                .args([
+                    "--session",
+                    "--print-reply",
+                    "--dest=org.freedesktop.FileManager1",
+                    "/org/freedesktop/FileManager1",
+                    "org.freedesktop.FileManager1.ShowItems",
+                    &format!("array:string:{}", uri),
+                    "string:",
+                ])
+                .output();
+
+            // Fallback to xdg-open on parent folder if D-Bus fails
+            let dbus_ok = dbus_result.as_ref().map(|o| o.status.success()).unwrap_or(false);
+            if !dbus_ok {
+                let parent = target.parent().unwrap_or(&target);
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(parent.to_string_lossy().to_string())
+                    .spawn();
+            }
+        } else {
+            let _ = std::process::Command::new("xdg-open").arg(&path_str).spawn();
+        }
     }
 
     Ok(true)
@@ -454,10 +493,92 @@ pub async fn get_clipboard_files() -> Result<Vec<String>, String> {
             Err(_) => Ok(vec![]),
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        Ok(linux_clipboard_files())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(macos_clipboard_files())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         Ok(vec![])
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_clipboard_files() -> Vec<String> {
+    // Try Wayland first via wl-paste, fall back to xclip on X11.
+    // Both file managers (Nautilus, Dolphin etc.) put copied files in the
+    // x-special/gnome-copied-files mime type as a list of file:// URIs.
+    let try_clip = |cmd: &str, args: &[&str]| -> Option<String> {
+        std::process::Command::new(cmd)
+            .args(args)
+            .output()
+            .ok()
+            .and_then(|o| if o.status.success() { String::from_utf8(o.stdout).ok() } else { None })
+    };
+
+    let raw = try_clip("wl-paste", &["--type", "x-special/gnome-copied-files"])
+        .or_else(|| try_clip("xclip", &["-selection", "clipboard", "-t", "x-special/gnome-copied-files", "-o"]))
+        // KDE Plasma uses its own MIME type
+        .or_else(|| try_clip("wl-paste", &["--type", "application/x-kde-cutselection"]))
+        .or_else(|| try_clip("xclip", &["-selection", "clipboard", "-t", "application/x-kde-cutselection", "-o"]))
+        // Generic uri-list (works for most file managers)
+        .or_else(|| try_clip("wl-paste", &["--type", "text/uri-list"]))
+        .or_else(|| try_clip("xclip", &["-selection", "clipboard", "-t", "text/uri-list", "-o"]));
+
+    let Some(content) = raw else { return vec![]; };
+
+    // First line may be "copy" or "cut" — skip it. Keep file:// URIs only.
+    content.lines()
+        .filter(|l| l.starts_with("file://"))
+        .filter_map(|l| {
+            let path = l.trim_start_matches("file://");
+            // URL-decode percent-encoded chars
+            let decoded = urlencoding::decode(path).ok()?;
+            Some(decoded.to_string())
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_clipboard_files() -> Vec<String> {
+    // Read NSPasteboard via osascript — files copied in Finder appear as POSIX paths
+    let output = std::process::Command::new("osascript")
+        .args(["-e", "the clipboard as «class furl»"])
+        .output();
+    let Ok(out) = output else { return vec![]; };
+    if !out.status.success() { return vec![]; }
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    // Output is "{«class furl»\"file:///path1\", «class furl»\"file:///path2\"}"
+    text.split("file://")
+        .skip(1)
+        .filter_map(|s| s.split('"').next())
+        .map(|s| urlencoding::decode(s).map(|c| c.to_string()).unwrap_or_else(|_| s.to_string()))
+        .collect()
+}
+
+/// Returns platform info so the UI can disable features that don't work
+/// (e.g. global hotkeys are blocked by Wayland's security model)
+#[tauri::command]
+pub async fn get_platform_info() -> Result<serde_json::Value, String> {
+    let is_wayland = {
+        #[cfg(target_os = "linux")]
+        {
+            std::env::var("WAYLAND_DISPLAY").is_ok()
+                || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false)
+        }
+        #[cfg(not(target_os = "linux"))]
+        { false }
+    };
+    Ok(serde_json::json!({
+        "os": std::env::consts::OS,
+        "is_wayland": is_wayland,
+        "supports_global_hotkeys": !is_wayland,
+        "supports_window_state_persistence": !is_wayland,
+    }))
 }
 
 #[tauri::command]
@@ -509,7 +630,17 @@ pub async fn get_explorer_selection() -> Result<Vec<String>, String> {
         });
         rx.await.map_err(|_| "Thread join failed".to_string())?
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        // No "active file manager selection" concept on Linux — fall back to
+        // clipboard files (user copies in their file manager, then triggers send)
+        Ok(linux_clipboard_files())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(macos_clipboard_files())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         Ok(vec![])
     }
