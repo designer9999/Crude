@@ -368,8 +368,13 @@
             </div>
           {:else}
             <Button variant="elevated" full onclick={async () => {
-              const f = await pickSaveFolder();
-              if (f) app.updateReceiveOption("outFolder", f);
+              try {
+                const f = await pickSaveFolder();
+                if (f) app.updateReceiveOption("outFolder", f);
+                else onsnackbar?.("Folder picker dialog was cancelled or unavailable. On Linux Wayland, install xdg-desktop-portal-gtk or xdg-desktop-portal-hyprland.");
+              } catch (err: any) {
+                onsnackbar?.(`Folder picker failed: ${err?.message ?? err}`);
+              }
             }}>
               <Icon name="create_new_folder" size={18} />
               Set save folder

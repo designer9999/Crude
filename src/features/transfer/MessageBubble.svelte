@@ -203,7 +203,7 @@
                 <Icon name={downloading[item.path] ? "hourglass_empty" : "download"} size={16} />
               </button>
             {:else if !mobile}
-              <button class="att-open-folder" onclick={(e) => { e.stopPropagation(); showInExplorer(item.path); }} title="Show in folder">
+              <button class="att-open-folder" onclick={async (e) => { e.stopPropagation(); try { await showInExplorer(item.path); } catch (err: any) { onsnackbar?.(`Open failed: ${err?.message ?? err}`); } }} title="Show in folder">
                 <Icon name="open_in_new" size={14} />
               </button>
             {/if}
@@ -253,7 +253,7 @@
                   <Icon name={downloading[file.path] ? "hourglass_empty" : "download"} size={16} />
                 </button>
               {:else if !mobile}
-                <button class="att-file-open-folder" onclick={(e) => { e.stopPropagation(); showInExplorer(file.path); }} title="Show in folder">
+                <button class="att-file-open-folder" onclick={async (e) => { e.stopPropagation(); try { await showInExplorer(file.path); } catch (err: any) { onsnackbar?.(`Open failed: ${err?.message ?? err}`); } }} title="Show in folder">
                   <Icon name="open_in_new" size={12} />
                 </button>
               {/if}

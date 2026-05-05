@@ -242,40 +242,36 @@ pub async fn show_in_explorer(path: String) -> Result<bool, String> {
     #[cfg(target_os = "linux")]
     {
         let path_str = target.to_string_lossy().to_string();
+        let parent = target
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| path_str.clone());
+
+        let try_spawn = |cmd: &str, args: &[&str]| -> bool {
+            std::process::Command::new(cmd)
+                .args(args)
+                .spawn()
+                .is_ok()
+        };
 
         if target.is_file() {
-            // Build proper file:// URI with path encoding (spaces → %20, etc.)
-            let encoded = path_str
-                .split('/')
-                .map(|seg| urlencoding::encode(seg).into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            let uri = format!("file://{}", encoded);
+            // Strategy 1: known file managers with native --select flag.
+            // We use spawn (don't wait) — fastest and works without DBus.
+            let opened = try_spawn("dolphin", &["--select", &path_str])
+                || try_spawn("nautilus", &["--select", &path_str])
+                || try_spawn("nemo", &[&path_str])
+                || try_spawn("caja", &["--select", &path_str])
+                || try_spawn("thunar", &[&parent])
+                || try_spawn("pcmanfm", &[&parent])
+                || try_spawn("xdg-open", &[&parent]);
 
-            // Try freedesktop FileManager1 D-Bus interface (works with Nautilus,
-            // Nemo, Caja, Dolphin, Thunar, PCManFM — all major Linux file managers)
-            let dbus_result = std::process::Command::new("dbus-send")
-                .args([
-                    "--session",
-                    "--print-reply",
-                    "--dest=org.freedesktop.FileManager1",
-                    "/org/freedesktop/FileManager1",
-                    "org.freedesktop.FileManager1.ShowItems",
-                    &format!("array:string:{}", uri),
-                    "string:",
-                ])
-                .output();
-
-            // Fallback to xdg-open on parent folder if D-Bus fails
-            let dbus_ok = dbus_result.as_ref().map(|o| o.status.success()).unwrap_or(false);
-            if !dbus_ok {
-                let parent = target.parent().unwrap_or(&target);
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(parent.to_string_lossy().to_string())
-                    .spawn();
+            if !opened {
+                return Err("No file manager found. Install one of: \
+                    dolphin, nautilus, nemo, thunar, pcmanfm, or xdg-utils."
+                    .to_string());
             }
-        } else {
-            let _ = std::process::Command::new("xdg-open").arg(&path_str).spawn();
+        } else if !try_spawn("xdg-open", &[&path_str]) {
+            return Err("xdg-open not found. Install xdg-utils.".to_string());
         }
     }
 
