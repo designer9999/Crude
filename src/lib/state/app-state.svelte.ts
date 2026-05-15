@@ -71,6 +71,7 @@ const ACTIVITY_KEY = "landrop-activity";
 const SETTINGS_KEY = "landrop-settings";
 const RECEIVE_KEY = "landrop-receive-options";
 const HOTKEYS_KEY = "landrop-hotkeys";
+const MAX_FOLDER_CHILDREN_IN_HISTORY = 100;
 
 export interface HotkeySettings {
   quickSend: string;
@@ -115,6 +116,113 @@ function loadString(key: string): string | null {
   } catch {
     return null;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isMessageDirection(value: unknown): value is MessageEntry["direction"] {
+  return value === "sent" || value === "received";
+}
+
+function isAttachmentType(value: unknown): value is MessageAttachment["type"] {
+  return value === "image" || value === "video" || value === "file" || value === "folder";
+}
+
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function basename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? "";
+}
+
+function sanitizeAttachment(raw: unknown, depth = 0): MessageAttachment | null {
+  if (!isRecord(raw)) return null;
+
+  const path = stringValue(raw.path);
+  const name = stringValue(raw.name, basename(path) || "item");
+  let type: MessageAttachment["type"] = isAttachmentType(raw.type) ? raw.type : "file";
+  const rawChildren = Array.isArray(raw.children)
+    ? raw.children
+    : isRecord(raw.children)
+      ? [raw.children]
+      : [];
+
+  if (rawChildren.length > 0) type = "folder";
+  if (!name && !path) return null;
+
+  const attachment: MessageAttachment = {
+    name,
+    path,
+    type,
+  };
+
+  const size = stringValue(raw.size);
+  if (size) attachment.size = size;
+
+  const fileCount = numberValue(raw.fileCount);
+  if (fileCount !== undefined) attachment.fileCount = fileCount;
+
+  if (type === "folder" && depth < 1) {
+    const children = rawChildren
+      .slice(0, MAX_FOLDER_CHILDREN_IN_HISTORY)
+      .map((child) => sanitizeAttachment(child, depth + 1))
+      .filter((child): child is MessageAttachment => child !== null);
+
+    if (children.length > 0) attachment.children = children;
+    attachment.fileCount = Math.max(fileCount ?? 0, rawChildren.length, children.length);
+  }
+
+  return attachment;
+}
+
+function sanitizeAttachments(raw: unknown): MessageAttachment[] | undefined {
+  const values = Array.isArray(raw)
+    ? raw
+    : isRecord(raw)
+      ? [raw]
+      : [];
+  const attachments = values
+    .map((attachment) => sanitizeAttachment(attachment))
+    .filter((attachment): attachment is MessageAttachment => attachment !== null);
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+function sanitizeMessage(raw: unknown): MessageEntry | null {
+  if (!isRecord(raw)) return null;
+
+  const peerId = stringValue(raw.peerId);
+  const direction = isMessageDirection(raw.direction) ? raw.direction : null;
+  if (!peerId || !direction) return null;
+
+  const id = stringValue(raw.id, crypto.randomUUID());
+  const timestamp = stringValue(raw.timestamp, new Date().toISOString());
+  const text = stringValue(raw.text);
+  const attachments = sanitizeAttachments(raw.attachments);
+
+  const message: MessageEntry = {
+    id,
+    peerId,
+    direction,
+    text,
+    timestamp,
+  };
+  if (raw.starred === true) message.starred = true;
+  if (attachments) message.attachments = attachments;
+  return message;
+}
+
+function sanitizeMessages(raw: unknown): MessageEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((message) => sanitizeMessage(message))
+    .filter((message): message is MessageEntry => message !== null);
 }
 
 export interface ReceiveOptions {
@@ -289,9 +397,10 @@ class AppState {
   // ── Messages ──
 
   addMessage(entry: Omit<MessageEntry, "id" | "timestamp">) {
+    const attachments = sanitizeAttachments(entry.attachments);
     this.messages = [
       ...this.messages,
-      { ...entry, id: crypto.randomUUID(), timestamp: new Date().toISOString() },
+      { ...entry, attachments, id: crypto.randomUUID(), timestamp: new Date().toISOString() },
     ];
     this._pruneMessages();
   }
@@ -397,7 +506,7 @@ class AppState {
     this.devices = Array.isArray(snapshot.devices) ? snapshot.devices : [];
     this.activeDeviceId = snapshot.activeDeviceId ?? null;
     this.activity = Array.isArray(snapshot.activity) ? snapshot.activity : [];
-    this.messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+    this.messages = sanitizeMessages(snapshot.messages);
     this.notificationsEnabled = snapshot.notificationsEnabled ?? true;
     this.popOnReceive = snapshot.popOnReceive ?? false;
     this.receiveOptions = snapshot.receiveOptions ?? {};
@@ -410,7 +519,7 @@ class AppState {
       devices: this.devices,
       activeDeviceId: this.activeDeviceId,
       activity: this.activity,
-      messages: this.messages,
+      messages: sanitizeMessages(this.messages),
       notificationsEnabled: this.notificationsEnabled,
       popOnReceive: this.popOnReceive,
       receiveOptions: this.receiveOptions,
@@ -443,7 +552,7 @@ class AppState {
       devices,
       activeDeviceId,
       activity,
-      messages,
+      messages: sanitizeMessages(messages),
       notificationsEnabled: notifications.n,
       popOnReceive: popOnReceive.pop,
       receiveOptions,

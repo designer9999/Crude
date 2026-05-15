@@ -39,6 +39,7 @@
   let transferRateBps = $state<number | null>(null);
   let transferEtaSeconds = $state<number | null>(null);
   let lastProgressSample = $state<{ bytes: number; at: number; direction: "send" | "receive" } | null>(null);
+  const MAX_HISTORY_ITEMS = 100;
 
   function showSnackbar(msg: string) {
     snackbarMsg = msg;
@@ -59,6 +60,14 @@
       ip: "",
     });
     app.addLog("warn", `Recovered hidden peer ${peerId.slice(0, 8)} from inbound traffic`);
+  }
+
+  function revealIncomingPeer(peerId: string) {
+    ensurePeerVisible(peerId);
+    if (app.activeDeviceId !== peerId) app.setActiveDevice(peerId);
+    app.activeView = "transfer";
+    app.messageViewAll = false;
+    app.messageSearch = "";
   }
 
   function getReceivedFolderPath(filePath: string, relativeName: string): string {
@@ -89,8 +98,12 @@
   function getAttachmentCandidates(attachment: MessageAttachment): Array<{ name: string; path: string }> {
     return [
       { name: attachment.name, path: attachment.path },
-      ...(attachment.children ?? []).map((child) => ({ name: child.name, path: child.path })),
+      ...(Array.isArray(attachment.children) ? attachment.children : []).map((child) => ({ name: child.name, path: child.path })),
     ];
+  }
+
+  function limitHistoryItems<T>(items: T[]): T[] {
+    return items.length > MAX_HISTORY_ITEMS ? items.slice(0, MAX_HISTORY_ITEMS) : items;
   }
 
   async function repairStoredMessagePaths() {
@@ -242,10 +255,10 @@
           app.addLog("warn", `Device offline: ${device?.alias ?? peerId}`);
         }),
         onLanTextReceived((peerId, text) => {
-          ensurePeerVisible(peerId);
-          if (!app.activeDeviceId) app.setActiveDevice(peerId);
+          revealIncomingPeer(peerId);
           app.addMessage({ peerId, direction: "received", text });
           app.addActivity({ peerId, direction: "received", type: "text", items: [], success: true });
+          app.addLog("info", `Received text from ${peerId.slice(0, 8)} (${text.length} chars)`);
           if (app.notificationsEnabled) playReceiveSound();
           if (app.notificationsEnabled && !document.hasFocus()) {
             sendNativeNotification(
@@ -256,9 +269,8 @@
           if (app.popOnReceive) windowShow();
         }),
         onLanFilesReceived((peerId, files, details) => {
-          ensurePeerVisible(peerId);
-          if (!app.activeDeviceId) app.setActiveDevice(peerId);
-          app.addActivity({ peerId, direction: "received", type: "files", items: files, success: true, outFolder: app.effectiveOutFolder });
+          revealIncomingPeer(peerId);
+          app.addActivity({ peerId, direction: "received", type: "files", items: limitHistoryItems(files), success: true, outFolder: app.effectiveOutFolder });
           if (details.length > 0) {
             const folderFiles = new Map<string, typeof details>();
             const looseFiles: typeof details = [];
@@ -277,7 +289,7 @@
             for (const [folder, folderDetails] of folderFiles) {
               const totalSize = folderDetails.reduce((sum, f) => sum + f.size, 0);
               const folderPath = getReceivedFolderPath(folderDetails[0].path, folderDetails[0].name);
-              const children = folderDetails.map((detail) => ({
+              const children = limitHistoryItems(folderDetails).map((detail) => ({
                 name: detail.name,
                 path: detail.path,
                 size: fileSizeStr(detail.size),
@@ -396,8 +408,8 @@
       const sent = await lanSendFiles(device.id, pathsCopy, device.ip);
       if (sent) {
         const names = filesCopy.map(f => f.info?.name ?? f.path.split(/[\\/]/).pop() ?? "file");
-        app.addActivity({ peerId: device.id, direction: "sent", type: "files", items: names, success: true });
-        const attachments: MessageAttachment[] = filesCopy.map(f => ({
+        app.addActivity({ peerId: device.id, direction: "sent", type: "files", items: limitHistoryItems(names), success: true });
+        const attachments: MessageAttachment[] = limitHistoryItems(filesCopy).map(f => ({
           name: f.info?.name ?? f.path.split(/[\\/]/).pop() ?? "file",
           path: f.path, size: f.info?.size ?? "",
           type: fileIsImage(f.info?.name ?? f.path) ? "image" as const : fileIsVideo(f.info?.name ?? f.path) ? "video" as const : "file" as const,

@@ -31,6 +31,11 @@
   let videoProgress = $state<Record<string, number>>({});
   let videoDuration = $state<Record<string, number>>({});
   let videoMuted = $state<Record<string, boolean>>({});
+  let isSent = $derived(msg.direction === "sent");
+  let attachments = $derived(Array.isArray(msg.attachments) ? msg.attachments : []);
+  let hasAttachments = $derived(attachments.length > 0);
+  let media = $derived(attachments.filter(a => a.type === "image" || a.type === "video"));
+  let files = $derived(attachments.filter(a => a.type === "file" || a.type === "folder"));
 
   onDestroy(() => {
     for (const path of Object.keys(videoEls)) {
@@ -44,7 +49,7 @@
 
   // Resolve video asset URLs on mount
   $effect(() => {
-    for (const att of msg.attachments ?? []) {
+    for (const att of attachments) {
       if (att.type === "video" && att.path && !(att.path in videoUrls)) {
         getVideoSrc(att.path).then(url => {
           if (url) videoUrls = { ...videoUrls, [att.path]: url };
@@ -99,11 +104,6 @@
     downloading = { ...downloading, [path]: false };
   }
 
-  let isSent = $derived(msg.direction === "sent");
-  let hasAttachments = $derived(msg.attachments && msg.attachments.length > 0);
-  let media = $derived(msg.attachments?.filter(a => a.type === "image" || a.type === "video") ?? []);
-  let files = $derived(msg.attachments?.filter(a => a.type === "file" || a.type === "folder") ?? []);
-
   function getPeerName(peerId: string): string {
     return app.devices.find(d => d.id === peerId)?.alias ?? "Unknown";
   }
@@ -113,7 +113,7 @@
   }
 
   function getFolderPreviewItems(file: MessageAttachment) {
-    return (file.children ?? []).slice(0, 3);
+    return (Array.isArray(file.children) ? file.children : []).slice(0, 3);
   }
 
   // Right-click toggles text-selection mode on this bubble

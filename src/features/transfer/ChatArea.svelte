@@ -97,6 +97,21 @@
 
   // ── Auto-scroll ──
   let wasAtBottom = true;
+  let lastRevealedIncomingMessageId = "";
+
+  $effect(() => {
+    const latest = app.messages[app.messages.length - 1];
+    if (!latest || latest.id === lastRevealedIncomingMessageId || latest.direction !== "received") return;
+
+    lastRevealedIncomingMessageId = latest.id;
+    if (app.messageViewAll || app.activeDevice?.id !== latest.peerId) return;
+
+    showStarredOnly = false;
+    searchOpen = false;
+    app.messageSearch = "";
+    wasAtBottom = true;
+  });
+
   $effect(() => {
     if (displayMessages.length && messagesEl && !showStarredOnly && !app.messageSearch) {
       requestAnimationFrame(() => {
