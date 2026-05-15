@@ -6,11 +6,13 @@ pub mod transfer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 
 use discovery::DiscoveredPeer;
 use identity::normalize_uuid;
@@ -131,21 +133,63 @@ impl LanService {
         peer_ip_hint: Option<&str>,
         text: &str,
     ) -> Result<bool, String> {
-        let peer_ip = self.resolve_peer_ip(peer_id, peer_ip_hint).await;
-        if let Some(ip) = peer_ip {
-            let uuid = self.identity.id_bytes();
+        let mut peer_ips = self.resolve_peer_ips(peer_id, peer_ip_hint).await;
+        if peer_ips.is_empty() {
+            if let Some(ip) = self.find_peer_on_lan(peer_id).await {
+                peer_ips.push(ip);
+            }
+        }
+        if peer_ips.is_empty() {
+            return Err(format!("Peer {} not found or offline", peer_id));
+        }
+
+        let uuid = self.identity.id_bytes();
+        let mut last_err = String::new();
+
+        for ip in &peer_ips {
             // Retry once on failure (TCP listener may have recovered)
-            match transfer::send_text_to_peer(&ip, &uuid, text).await {
-                Ok(()) => Ok(true),
-                Err(_first_err) => {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    transfer::send_text_to_peer(&ip, &uuid, text).await?;
-                    Ok(true)
+            for attempt in 0..2 {
+                match transfer::send_text_to_peer(ip, &uuid, text).await {
+                    Ok(()) => {
+                        self.remember_peer_ip(peer_id, ip).await;
+                        return Ok(true);
+                    }
+                    Err(err) => {
+                        last_err = err;
+                        if attempt == 0 {
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+                    }
                 }
             }
-        } else {
-            Err(format!("Peer {} not found or offline", peer_id))
+
+            let _ = self.handle.emit(
+                "lan_log",
+                serde_json::json!({
+                    "level": "warn",
+                    "text": format!("Text send to {} via {} failed: {}", peer_id, ip, last_err),
+                }),
+            );
         }
+
+        if let Some(ip) = self.find_peer_on_lan(peer_id).await {
+            if !peer_ips.iter().any(|existing| existing == &ip) {
+                match transfer::send_text_to_peer(&ip, &uuid, text).await {
+                    Ok(()) => {
+                        self.remember_peer_ip(peer_id, &ip).await;
+                        return Ok(true);
+                    }
+                    Err(err) => last_err = err,
+                }
+            }
+        }
+
+        Err(format!(
+            "Failed to send to peer {} via {}: {}",
+            peer_id,
+            peer_ips.join(", "),
+            last_err
+        ))
     }
 
     pub async fn send_files(
@@ -154,20 +198,57 @@ impl LanService {
         peer_ip_hint: Option<&str>,
         paths: &[String],
     ) -> Result<bool, String> {
-        let peer_ip = self.resolve_peer_ip(peer_id, peer_ip_hint).await;
-        if let Some(ip) = peer_ip {
-            let uuid = self.identity.id_bytes();
-            match transfer::send_files_to_peer(&ip, &uuid, paths, Some(&self.handle)).await {
-                Ok(()) => Ok(true),
-                Err(_first_err) => {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    transfer::send_files_to_peer(&ip, &uuid, paths, Some(&self.handle)).await?;
-                    Ok(true)
+        let mut peer_ips = self.resolve_peer_ips(peer_id, peer_ip_hint).await;
+        if peer_ips.is_empty() {
+            if let Some(ip) = self.find_peer_on_lan(peer_id).await {
+                peer_ips.push(ip);
+            }
+        }
+        if peer_ips.is_empty() {
+            return Err(format!("Peer {} not found or offline", peer_id));
+        }
+
+        let uuid = self.identity.id_bytes();
+        let mut last_err = String::new();
+
+        for ip in &peer_ips {
+            match transfer::send_files_to_peer(ip, &uuid, paths, Some(&self.handle)).await {
+                Ok(()) => {
+                    self.remember_peer_ip(peer_id, ip).await;
+                    return Ok(true);
+                }
+                Err(err) => {
+                    last_err = err;
                 }
             }
-        } else {
-            Err(format!("Peer {} not found or offline", peer_id))
+
+            let _ = self.handle.emit(
+                "lan_log",
+                serde_json::json!({
+                    "level": "warn",
+                    "text": format!("File send to {} via {} failed: {}", peer_id, ip, last_err),
+                }),
+            );
         }
+
+        if let Some(ip) = self.find_peer_on_lan(peer_id).await {
+            if !peer_ips.iter().any(|existing| existing == &ip) {
+                match transfer::send_files_to_peer(&ip, &uuid, paths, Some(&self.handle)).await {
+                    Ok(()) => {
+                        self.remember_peer_ip(peer_id, &ip).await;
+                        return Ok(true);
+                    }
+                    Err(err) => last_err = err,
+                }
+            }
+        }
+
+        Err(format!(
+            "Failed to send to peer {} via {}: {}",
+            peer_id,
+            peer_ips.join(", "),
+            last_err
+        ))
     }
 
     pub async fn set_peer_folder(&self, peer_id: &str, folder: &str) {
@@ -221,30 +302,121 @@ impl LanService {
             .map(|p| p.ip.clone())
     }
 
-    async fn resolve_peer_ip(&self, peer_id: &str, peer_ip_hint: Option<&str>) -> Option<String> {
-        if let Some(ip) = self.get_peer_ip(peer_id).await {
-            return Some(ip);
-        }
+    async fn resolve_peer_ips(&self, peer_id: &str, peer_ip_hint: Option<&str>) -> Vec<String> {
+        let backend_ip = self.get_peer_ip(peer_id).await;
 
         let hinted_ip = peer_ip_hint
             .map(str::trim)
             .filter(|ip| !ip.is_empty())
             .map(str::to_string);
 
-        if hinted_ip.is_some() {
+        let mut ips = Vec::new();
+
+        if let Some(ip) = backend_ip {
+            ips.push(ip);
+        }
+
+        if let Some(ip) = hinted_ip {
+            if !ips.iter().any(|existing| existing == &ip) {
+                ips.push(ip);
+            }
+        }
+
+        let before_filter = ips.clone();
+        ips.retain(|ip| discovery::is_current_lan_peer_ip(ip));
+        for rejected in before_filter
+            .iter()
+            .filter(|ip| !ips.iter().any(|accepted| accepted == *ip))
+        {
             let _ = self.handle.emit(
                 "lan_log",
                 serde_json::json!({
                     "level": "warn",
                     "text": format!(
-                        "Peer {} missing from backend discovery, using UI IP hint",
-                        peer_id
+                        "Ignoring non-LAN peer IP {} for {}; only same LAN as this PC is allowed",
+                        rejected, peer_id
                     ),
                 }),
             );
         }
 
-        hinted_ip
+        if ips.len() > 1 {
+            let _ = self.handle.emit(
+                "lan_log",
+                serde_json::json!({
+                    "level": "info",
+                    "text": format!(
+                        "Peer {} has multiple candidate IPs: {}",
+                        peer_id,
+                        ips.join(", ")
+                    ),
+                }),
+            );
+        }
+
+        ips
+    }
+
+    async fn remember_peer_ip(&self, peer_id: &str, ip: &str) {
+        let normalized = normalize_uuid(peer_id);
+        let mut peers = self.discovered_peers.lock().await;
+        if let Some(peer) = peers.get_mut(peer_id) {
+            peer.ip = ip.to_string();
+        } else if let Some(peer) = normalized.as_ref().and_then(|id| peers.get_mut(id)) {
+            peer.ip = ip.to_string();
+        }
+    }
+
+    async fn find_peer_on_lan(&self, peer_id: &str) -> Option<String> {
+        let target_id = normalize_uuid(peer_id).unwrap_or_else(|| peer_id.trim().to_string());
+        let target_label: String = target_id.chars().take(8).collect();
+        let local_ip = discovery::get_local_ipv4()?;
+        let my_uuid = self.identity.id_bytes();
+        let [a, b, c, own_host] = local_ip.octets();
+        let mut probes = JoinSet::new();
+
+        let _ = self.handle.emit(
+            "lan_log",
+            serde_json::json!({
+                "level": "info",
+                "text": format!("Scanning {}.{}.{}.0/24 for {}", a, b, c, target_label.as_str()),
+            }),
+        );
+
+        for host in 1..=254 {
+            if host == own_host {
+                continue;
+            }
+
+            let ip = Ipv4Addr::new(a, b, c, host).to_string();
+            let uuid = my_uuid;
+            probes.spawn(async move {
+                transfer::probe_peer_id(&ip, &uuid)
+                    .await
+                    .ok()
+                    .map(|found_id| (found_id, ip))
+            });
+        }
+
+        while let Some(result) = probes.join_next().await {
+            let Ok(Some((found_id, ip))) = result else {
+                continue;
+            };
+            let found_id = normalize_uuid(&found_id).unwrap_or(found_id);
+            if found_id == target_id {
+                self.remember_peer_ip(&target_id, &ip).await;
+                let _ = self.handle.emit(
+                    "lan_log",
+                    serde_json::json!({
+                        "level": "success",
+                        "text": format!("Recovered peer {} at {}", target_label.as_str(), ip),
+                    }),
+                );
+                return Some(ip);
+            }
+        }
+
+        None
     }
 
     async fn persist_folder_settings(&self) {

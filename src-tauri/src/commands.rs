@@ -205,7 +205,9 @@ pub async fn show_in_explorer(path: String) -> Result<bool, String> {
     {
         use std::os::windows::process::CommandExt;
         // Strip UNC prefix (\\?\) from canonicalized paths — Explorer can't handle them
-        let path_str = target.canonicalize().ok()
+        let path_str = target
+            .canonicalize()
+            .ok()
             .map(|p| {
                 let s = p.to_string_lossy().to_string();
                 s.strip_prefix(r"\\?\").map(|s| s.to_string()).unwrap_or(s)
@@ -286,9 +288,8 @@ pub async fn show_in_explorer(path: String) -> Result<bool, String> {
             c
         };
 
-        let try_spawn = |bin: &str, args: &[&str]| -> bool {
-            clean_cmd(bin).args(args).spawn().is_ok()
-        };
+        let try_spawn =
+            |bin: &str, args: &[&str]| -> bool { clean_cmd(bin).args(args).spawn().is_ok() };
 
         let mut tried: Vec<String> = Vec::new();
         let mut record = |bin: &str, ok: bool| {
@@ -336,9 +337,7 @@ pub async fn show_in_explorer(path: String) -> Result<bool, String> {
                     tried.join(", ")
                 ));
             }
-        } else if !try_spawn("xdg-open", &[&path_str])
-            && !try_spawn("gio", &["open", &path_str])
-        {
+        } else if !try_spawn("xdg-open", &[&path_str]) && !try_spawn("gio", &["open", &path_str]) {
             return Err("xdg-open or gio not found. Install xdg-utils or glib2.".to_string());
         }
     }
@@ -581,22 +580,58 @@ fn linux_clipboard_files() -> Vec<String> {
             .args(args)
             .output()
             .ok()
-            .and_then(|o| if o.status.success() { String::from_utf8(o.stdout).ok() } else { None })
+            .and_then(|o| {
+                if o.status.success() {
+                    String::from_utf8(o.stdout).ok()
+                } else {
+                    None
+                }
+            })
     };
 
     let raw = try_clip("wl-paste", &["--type", "x-special/gnome-copied-files"])
-        .or_else(|| try_clip("xclip", &["-selection", "clipboard", "-t", "x-special/gnome-copied-files", "-o"]))
+        .or_else(|| {
+            try_clip(
+                "xclip",
+                &[
+                    "-selection",
+                    "clipboard",
+                    "-t",
+                    "x-special/gnome-copied-files",
+                    "-o",
+                ],
+            )
+        })
         // KDE Plasma uses its own MIME type
         .or_else(|| try_clip("wl-paste", &["--type", "application/x-kde-cutselection"]))
-        .or_else(|| try_clip("xclip", &["-selection", "clipboard", "-t", "application/x-kde-cutselection", "-o"]))
+        .or_else(|| {
+            try_clip(
+                "xclip",
+                &[
+                    "-selection",
+                    "clipboard",
+                    "-t",
+                    "application/x-kde-cutselection",
+                    "-o",
+                ],
+            )
+        })
         // Generic uri-list (works for most file managers)
         .or_else(|| try_clip("wl-paste", &["--type", "text/uri-list"]))
-        .or_else(|| try_clip("xclip", &["-selection", "clipboard", "-t", "text/uri-list", "-o"]));
+        .or_else(|| {
+            try_clip(
+                "xclip",
+                &["-selection", "clipboard", "-t", "text/uri-list", "-o"],
+            )
+        });
 
-    let Some(content) = raw else { return vec![]; };
+    let Some(content) = raw else {
+        return vec![];
+    };
 
     // First line may be "copy" or "cut" — skip it. Keep file:// URIs only.
-    content.lines()
+    content
+        .lines()
         .filter(|l| l.starts_with("file://"))
         .filter_map(|l| {
             let path = l.trim_start_matches("file://");
@@ -613,14 +648,22 @@ fn macos_clipboard_files() -> Vec<String> {
     let output = std::process::Command::new("osascript")
         .args(["-e", "the clipboard as «class furl»"])
         .output();
-    let Ok(out) = output else { return vec![]; };
-    if !out.status.success() { return vec![]; }
+    let Ok(out) = output else {
+        return vec![];
+    };
+    if !out.status.success() {
+        return vec![];
+    }
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     // Output is "{«class furl»\"file:///path1\", «class furl»\"file:///path2\"}"
     text.split("file://")
         .skip(1)
         .filter_map(|s| s.split('"').next())
-        .map(|s| urlencoding::decode(s).map(|c| c.to_string()).unwrap_or_else(|_| s.to_string()))
+        .map(|s| {
+            urlencoding::decode(s)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|_| s.to_string())
+        })
         .collect()
 }
 
@@ -632,10 +675,14 @@ pub async fn get_platform_info() -> Result<serde_json::Value, String> {
         #[cfg(target_os = "linux")]
         {
             std::env::var("WAYLAND_DISPLAY").is_ok()
-                || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false)
+                || std::env::var("XDG_SESSION_TYPE")
+                    .map(|v| v == "wayland")
+                    .unwrap_or(false)
         }
         #[cfg(not(target_os = "linux"))]
-        { false }
+        {
+            false
+        }
     };
     Ok(serde_json::json!({
         "os": std::env::consts::OS,

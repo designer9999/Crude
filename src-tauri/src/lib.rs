@@ -21,7 +21,9 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     {
         let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok()
-            || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false);
+            || std::env::var("XDG_SESSION_TYPE")
+                .map(|v| v == "wayland")
+                .unwrap_or(false);
         if is_wayland {
             // Always set, even if AppImage hook set it to x11
             std::env::set_var("GDK_BACKEND", "wayland");
@@ -86,7 +88,9 @@ pub fn run() {
                                 .unwrap_or(false)
                     }
                     #[cfg(not(target_os = "linux"))]
-                    { false }
+                    {
+                        false
+                    }
                 };
                 if !skip_window_state {
                     app.handle()

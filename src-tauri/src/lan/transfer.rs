@@ -141,6 +141,31 @@ pub async fn send_text_to_peer(
     Ok(())
 }
 
+/// Open the LanDrop TCP handshake only and return the peer UUID.
+pub async fn probe_peer_id(peer_ip: &str, my_uuid: &[u8; 16]) -> Result<String, String> {
+    let addr: SocketAddr = format!("{}:{}", peer_ip, TCP_PORT)
+        .parse()
+        .map_err(|e: std::net::AddrParseError| e.to_string())?;
+
+    time::timeout(Duration::from_millis(700), async {
+        let mut stream = TcpStream::connect(addr)
+            .await
+            .map_err(|e| format!("Cannot connect to {}: {}", addr, e))?;
+        stream.set_nodelay(true).map_err(|e| e.to_string())?;
+        stream.write_all(my_uuid).await.map_err(|e| e.to_string())?;
+        stream.flush().await.map_err(|e| e.to_string())?;
+
+        let mut peer_uuid = [0u8; 16];
+        stream
+            .read_exact(&mut peer_uuid)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(uuid::Uuid::from_bytes(peer_uuid).to_string())
+    })
+    .await
+    .map_err(|_| format!("Probe timeout to {}", addr))?
+}
+
 /// Open a TCP connection to peer, authenticate, send files, close.
 pub async fn send_files_to_peer(
     peer_ip: &str,
@@ -429,13 +454,16 @@ pub async fn receive_file(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let exec_exts = ["sh", "bash", "zsh", "fish", "py", "pl", "rb", "AppImage", "appimage"];
+        let exec_exts = [
+            "sh", "bash", "zsh", "fish", "py", "pl", "rb", "AppImage", "appimage",
+        ];
         let is_executable = out_path
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| exec_exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
             .unwrap_or(false)
-            || out_path.file_name()
+            || out_path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .map(|n| n.eq_ignore_ascii_case("AppImage"))
                 .unwrap_or(false);

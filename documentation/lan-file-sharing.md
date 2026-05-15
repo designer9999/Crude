@@ -1,218 +1,112 @@
-# LAN File Sharing — On-Demand TCP Architecture
+# LAN File Sharing Architecture
 
-## Why On-Demand (Not Persistent TCP)
+LanDrop uses local-only discovery and on-demand TCP transfer. It must keep
+working when multicast is unreliable, when Windows has virtual adapters, and
+when VPN software such as Mullvad owns the default route.
 
-Persistent TCP with ping/pong keepalive causes rapid disconnect cycling on real networks. Wi-Fi packets get dropped, one side detects "timeout" before the other, ghost connections pile up, and both sides fight over who's connected. This is how it breaks:
+## Core Rules
 
-1. Ping timeout fires on side A → emits disconnect
-2. Side B still thinks it's connected → sends into dead socket
-3. Both sides try to reconnect simultaneously → race condition
-4. Repeat every 10-20 seconds
+- Only same-LAN IPv4 peers are accepted. With a local IP of `192.168.0.98`,
+  valid peers must be on `192.168.0.0/24`; VPN, WSL, Hyper-V, Docker,
+  Bluetooth, link-local, loopback, and other virtual addresses are ignored.
+- mDNS is treated as a hint, not the source of truth. The app verifies peers
+  through the TCP UUID handshake before using a recovered IP.
+- Sending is on-demand. The TCP connection opens for one text/file transfer and
+  closes after `Done`.
+- The app must never get stuck on a stale peer IP. If a stored or UI-provided IP
+  fails, the service scans the local `/24` and recovers the peer by UUID.
 
-**Every major file transfer app uses on-demand TCP:**
-- LocalSend — HTTP REST per-file
-- AirDrop — HTTPS on-demand
-- Quick Share (Google) — TCP on-demand
-- LANDrop — TCP on-demand
-- KDE Connect — persistent, but 300s keepalive (it's a full integration platform, not just file transfer)
+## Lessons From Mature LAN Apps
 
-## Architecture Overview
+- LocalSend combines multicast discovery with an HTTP registration scan across
+  local IPs when multicast is unsuccessful. LanDrop follows the same principle:
+  mDNS is fast, but active same-LAN probing is the reliability fallback.
+- KDE Connect uses UDP discovery plus TCP connections and documents that
+  discovery can fail when UDP broadcast is blocked. Its issue tracker also shows
+  VPN/default-route bugs where discovery packets go out the wrong interface.
+- Warpinator uses zeroconf/mDNS for discovery and a direct TCP/gRPC transfer
+  channel. It treats the local network and firewall surface as explicit runtime
+  behavior, not incidental OS behavior.
 
-```
-┌─────────────────────────────────────────────────┐
-│                  UDP Beacons                     │
-│  (always running, every 2s, ~24 bytes each)     │
-│                                                  │
-│  Purpose: "I exist on this network with          │
-│            this code hash"                       │
-│                                                  │
-│  Beacon = 8 bytes magic + 16 bytes SHA256 hash   │
-└─────────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────┐
-│              Peer Availability                   │
-│                                                  │
-│  Beacon received → peer_last_seen = now()        │
-│  No beacon for 10s → peer unavailable            │
-│  Checked every 5s by availability timer          │
-│                                                  │
-│  Events:                                         │
-│    lan_peer_available   (first beacon seen)       │
-│    lan_peer_unavailable (10s without beacon)      │
-└─────────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────┐
-│            TCP Transfer (On-Demand)              │
-│                                                  │
-│  User clicks send →                              │
-│    1. Open TCP to peer_ip:29171                  │
-│    2. Authenticate (exchange code hash)          │
-│    3. Send message/files                         │
-│    4. Close TCP                                  │
-│                                                  │
-│  No persistent connection. No ping/pong.         │
-│  No keepalive. Connection lives only during      │
-│  the transfer.                                   │
-└─────────────────────────────────────────────────┘
-```
-
-## File Structure
+## Runtime Flow
 
 ```
-src-tauri/src/lan/
-├── mod.rs          — LanPeer (state holder), LanState (Tauri managed state)
-├── protocol.rs     — Message enum, constants (ports, magic, chunk size)
-├── discovery.rs    — UDP beacons + TCP listener (4 async tasks)
-└── transfer.rs     — Connection struct, send/receive functions
+start_lan_service
+  -> choose local LAN IPv4
+     - prefer physical private LAN adapters
+     - reject VPN and virtual adapter names
+  -> register _landrop._tcp.local. with the chosen LAN IP
+  -> browse mDNS for peers
+  -> listen on TCP 0.0.0.0:29171
+  -> run periodic same-LAN TCP healer scan
 ```
 
-## protocol.rs — Wire Format
+## Peer Discovery
 
-```rust
-pub const BEACON_PORT: u16 = 29170;  // UDP
-pub const TCP_PORT: u16 = 29171;     // TCP
-pub const BEACON_MAGIC: &[u8; 8] = b"LANDROP1";
-pub const CHUNK_SIZE: usize = 262144; // 256KB
+### mDNS
 
-pub enum Message {
-    Text { text: String },
-    File { name: String, size: u64 },
-    Dir { name: String },
-    Batch { count: u32 },
-    Done,
-}
-```
+The app registers `_landrop._tcp.local.` with:
 
-Messages are length-prefixed JSON: `[4 bytes big-endian length][JSON payload]`
+- `id`: stable device UUID
+- `alias`: user-visible device name
+- `dtype`: device type
+- TCP port: `29171`
 
-Beacon format: `[8 bytes "LANDROP1"][16 bytes SHA256(code)[..16]]`
+When a peer resolves, the app selects only an IPv4 address from the same `/24`
+as the current local LAN IP. If a peer advertises multiple IPv4 addresses, the
+app logs them and stores the same-LAN address.
 
-## discovery.rs — 4 Concurrent Tasks
+### Same-LAN Healer Scan
 
-### Task 1: Beacon Sender
-- Fires every 2 seconds
-- Sends to `255.255.255.255:29170` (limited broadcast)
-- Also sends to subnet-directed broadcasts (e.g. `192.168.1.255`)
-- Subnet broadcast is more reliable — many routers block limited broadcast
+Every 30 seconds, and also after send candidates fail, LanDrop probes the local
+`/24` subnet on TCP `29171`.
 
-### Task 2: Beacon Listener
-- Listens on UDP `0.0.0.0:29170`
-- Ignores own beacons (checks against local IPs)
-- Ignores beacons with wrong code hash
-- On matching beacon: updates `peer_last_seen = (ip, Instant::now())`
-- Emits `lan_peer_available` on first beacon from a peer
+Each probe performs only the LanDrop UUID handshake:
 
-### Task 3: Availability Checker
-- Runs every 5 seconds
-- If `peer_last_seen` is older than 10 seconds → clear it, emit `lan_peer_unavailable`
-- This is how the UI knows the peer went offline
+1. Connect to `peer_ip:29171`.
+2. Send this device's 16-byte UUID.
+3. Read the remote 16-byte UUID.
+4. If the UUID matches the target peer, store that IP and emit discovery.
 
-### Task 4: TCP Acceptor
-- Listens on TCP `0.0.0.0:29171`
-- On accept: spawns `handle_incoming_session` in a new task
-- Each session is independent — multiple concurrent receives are possible
+This makes send-back recover even when mDNS disappears, when the peer changed
+IP, or when a VPN adapter polluted discovery.
 
-### handle_incoming_session
-```
-1. Authenticate (exchange code hash over TCP)
-2. Loop: recv_message()
-   - Text → emit "lan_text_received"
-   - File → receive_file() → emit "lan_files_received"
-   - Batch → receive_batch() → emit "lan_files_received"
-   - Done / connection closed → break
-3. Connection drops automatically (Rust ownership)
-```
+## Send Path
 
-## transfer.rs — Sending (On-Demand)
+`send_text` and `send_files` build candidate IPs from backend discovery plus the
+UI hint. Before attempting transfer, each candidate must pass
+`is_current_lan_peer_ip`.
 
-### send_text_to_peer(peer_ip, code_hash, text)
-```
-1. TCP connect to peer_ip:29171 (5s timeout)
-2. Authenticate (send our hash, read peer hash, compare)
-3. Send Text message
-4. Connection drops (function returns, TcpStream dropped)
-```
+If all candidates fail:
 
-### send_files_to_peer(peer_ip, code_hash, paths, handle)
-```
-1. Walk all paths, collect (name, path) pairs
-   - Directories: recursively collect files, preserve relative paths
-   - Skip symlinks (security)
-2. TCP connect + authenticate
-3. If multiple files: send Batch { count } header
-4. For each file:
-   - If in subdirectory: send Dir { name } marker
-   - Send File { name, size } header
-   - Stream raw bytes in 256KB chunks
-   - Emit progress events
-5. If batch: send Done marker
-6. Connection drops
-```
+1. Scan the local `/24`.
+2. Recover the peer by UUID.
+3. Retry the transfer using the recovered IP.
+4. Remember the working IP for future sends.
 
-### Receiving
+## Receive Path
 
-`receive_file` and `receive_batch` are called by `handle_incoming_session`. Key features:
-- **Path traversal protection**: sanitize filename, verify canonical path stays under output folder
-- **Disk space check**: Windows `GetDiskFreeSpaceExW` before writing
-- **Auto-rename**: `file.txt` → `file (1).txt` → `file (2).txt` (Windows-style deduplication)
-- **Progress events**: `lan_transfer_progress` emitted during transfer
+Incoming TCP sessions are rejected unless the remote address is same-LAN IPv4.
+This prevents VPN, WSL, Hyper-V, and other non-LAN interfaces from rehydrating a
+peer with a bad send-back address.
 
-## mod.rs — State Management
+After the incoming UUID handshake succeeds, the sender is registered or updated
+in `discovered_peers`, so a device that can send to us can also be sent back to
+using the exact same LAN source address.
 
-```rust
-pub struct LanPeer {
-    handle: AppHandle,
-    running: Arc<Mutex<bool>>,
-    peer_last_seen: Arc<Mutex<Option<(String, Instant)>>>,
-    code_hash: Arc<Mutex<Vec<u8>>>,
-    out_folder: Arc<Mutex<String>>,
-}
-```
+## Firewall Surface
 
-- `start(code, out_folder)` — hashes the code, spawns `run_discovery`
-- `stop()` — sets `running = false`, clears peer
-- `send_text(text)` — reads `peer_last_seen` IP, calls `send_text_to_peer`
-- `send_files(paths)` — reads `peer_last_seen` IP, calls `send_files_to_peer`
-- `set_out_folder(folder)` — live update without restart
+- TCP `29171`: direct text/file transfer and UUID probes.
+- mDNS UDP `5353`: zeroconf discovery used by the `mdns-sd` crate.
 
-No persistent connection state. `peer_last_seen` is purely informational — "do we know where the peer is?"
+Windows installer hooks add inbound TCP/UDP rules for the installed
+`landrop.exe`. If running a different executable path during development,
+Windows may need a separate firewall allow rule for that path.
 
-## TCP Authentication Handshake
+## What Not To Do
 
-Both sides must have the same connection code (entered by user). The code is SHA256-hashed, truncated to 16 bytes.
-
-**Outgoing (initiator):**
-```
-1. Send our 16-byte hash
-2. Read peer's 16-byte hash
-3. Compare — if mismatch, drop connection
-```
-
-**Incoming (acceptor):**
-```
-1. Read peer's 16-byte hash
-2. Send our 16-byte hash
-3. Compare — if mismatch, drop connection
-```
-
-The order is reversed so both sides can verify without deadlocking.
-
-## Frontend Events
-
-| Event | Payload | When |
-|---|---|---|
-| `lan_peer_available` | `{ peer_ip }` | First beacon from matching peer |
-| `lan_peer_unavailable` | `{}` | No beacon for 10s |
-| `lan_text_received` | `{ text }` | Text message received |
-| `lan_files_received` | `{ files, file_details }` | File(s) received |
-| `lan_transfer_progress` | `{ direction, phase, ... }` | During send/receive |
-
-## What NOT To Do
-
-- **Don't add ping/pong** — beacons handle availability, TCP handles transfer
-- **Don't keep TCP open** — open per-transfer, close after
-- **Don't use aggressive timeouts** — beacons are fire-and-forget, TCP transfers have their own natural timeout (read/write will fail if peer dies)
-- **Don't emit connect/disconnect** — emit available/unavailable based on beacons
-- **Don't use `data-tauri-drag-region`** for titlebar — see `tauri-custom-titlebar.md`
+- Do not trust the first IPv4 address from mDNS.
+- Do not accept `10.x`, `172.x`, or `192.168.x` blindly; same subnet matters.
+- Do not persist a failed VPN or virtual adapter IP as the peer's working IP.
+- Do not rely on mDNS as the only discovery mechanism.
+- Do not keep persistent TCP connections or ping/pong keepalives for transfers.

@@ -1,4 +1,4 @@
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
@@ -8,11 +8,12 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 use tokio::time;
 
 use super::identity::{normalize_uuid, DeviceIdentity};
 use super::protocol::{MDNS_SERVICE_TYPE, TCP_PORT};
-use super::transfer::Connection;
+use super::transfer::{probe_peer_id, Connection};
 
 /// Emit a log event to the frontend debug panel
 fn emit_log(handle: &AppHandle, level: &str, text: &str) {
@@ -26,47 +27,142 @@ fn emit_log(handle: &AppHandle, level: &str, text: &str) {
     eprintln!("[LAN {}] {}", level, text);
 }
 
-/// Get the local LAN IPv4 address
+const BAD_INTERFACE_KEYWORDS: &[&str] = &[
+    "tun",
+    "tap",
+    "wg",
+    "vpn",
+    "proton",
+    "nord",
+    "mullvad",
+    "wireguard",
+    "virtual",
+    "hyper-v",
+    "vethernet",
+    "vmware",
+    "virtualbox",
+    "wsl",
+    "docker",
+    "bluetooth",
+    "loopback",
+];
+
+fn is_bad_interface(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    BAD_INTERFACE_KEYWORDS
+        .iter()
+        .any(|keyword| name_lower.contains(keyword))
+}
+
+fn is_usable_ipv4(ip: Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    !(ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || octets[0] == 169 && octets[1] == 254)
+}
+
+fn private_ipv4_score(ip: Ipv4Addr) -> i32 {
+    let octets = ip.octets();
+    if octets[0] == 192 && octets[1] == 168 {
+        30
+    } else if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+        20
+    } else if octets[0] == 10 {
+        10
+    } else {
+        1
+    }
+}
+
+fn is_same_lan_ipv4(local_ip: Ipv4Addr, peer_ip: Ipv4Addr) -> bool {
+    let local = local_ip.octets();
+    let peer = peer_ip.octets();
+    local[0] == peer[0] && local[1] == peer[1] && local[2] == peer[2]
+}
+
+fn local_interface_score(name: &str, ip: Ipv4Addr) -> i32 {
+    if !is_usable_ipv4(ip) {
+        return -1000;
+    }
+
+    let mut score = private_ipv4_score(ip);
+    if is_bad_interface(name) {
+        score -= 100;
+    }
+    score
+}
+
+fn peer_address_score(local_ip: Ipv4Addr, peer_ip: Ipv4Addr) -> i32 {
+    if !is_usable_ipv4(peer_ip) || !is_same_lan_ipv4(local_ip, peer_ip) {
+        return -1000;
+    }
+
+    let mut score = private_ipv4_score(peer_ip);
+    score += 100;
+
+    score
+}
+
+/// Get the local LAN IPv4 address, preferring physical private LAN adapters over VPN/VM adapters.
 pub fn get_local_ipv4() -> Option<Ipv4Addr> {
     let interfaces = local_ip_address::list_afinet_netifas().unwrap_or_default();
-    let vpn_keywords = [
-        "tun",
-        "tap",
-        "wg",
-        "vpn",
-        "proton",
-        "nord",
-        "mullvad",
-        "wireguard",
-    ];
 
-    for (name, ip) in &interfaces {
-        if let IpAddr::V4(v4) = ip {
-            if v4.is_loopback() {
-                continue;
-            }
-            let name_lower = name.to_lowercase();
-            if vpn_keywords.iter().any(|k| name_lower.contains(k)) {
-                continue;
-            }
-            let octets = v4.octets();
-            let is_lan = (octets[0] == 192 && octets[1] == 168)
-                || octets[0] == 10
-                || (octets[0] == 172 && (16..=31).contains(&octets[1]));
-            if is_lan {
-                return Some(*v4);
-            }
-        }
+    interfaces
+        .iter()
+        .filter_map(|(name, ip)| match ip {
+            IpAddr::V4(v4) => Some((*v4, local_interface_score(name, *v4))),
+            _ => None,
+        })
+        .filter(|(_, score)| *score > 0)
+        .max_by_key(|(_, score)| *score)
+        .map(|(ip, _)| ip)
+        .or_else(|| {
+            interfaces.iter().find_map(|(name, ip)| {
+                if is_bad_interface(name) {
+                    return None;
+                }
+                match ip {
+                    IpAddr::V4(v4) if is_usable_ipv4(*v4) => Some(*v4),
+                    _ => None,
+                }
+            })
+        })
+        .or_else(|| {
+            interfaces.iter().find_map(|(_, ip)| match ip {
+                IpAddr::V4(v4) if is_usable_ipv4(*v4) => Some(*v4),
+                _ => None,
+            })
+        })
+}
+
+fn choose_peer_ipv4<'a>(
+    addresses: impl Iterator<Item = &'a ScopedIp>,
+    local_ip: Ipv4Addr,
+) -> Option<Ipv4Addr> {
+    addresses
+        .filter_map(|addr| match addr.to_ip_addr() {
+            IpAddr::V4(v4) => Some((v4, peer_address_score(local_ip, v4))),
+            _ => None,
+        })
+        .filter(|(_, score)| *score > 0)
+        .max_by_key(|(_, score)| *score)
+        .map(|(ip, _)| ip)
+}
+
+pub fn is_current_lan_peer_ip(peer_ip: &str) -> bool {
+    match (get_local_ipv4(), peer_ip.parse::<Ipv4Addr>()) {
+        (Some(local_ip), Ok(peer_ip)) => is_same_lan_ipv4(local_ip, peer_ip),
+        _ => false,
     }
-    // Fallback: any non-loopback IPv4
-    for (_, ip) in &interfaces {
-        if let IpAddr::V4(v4) = ip {
-            if !v4.is_loopback() {
-                return Some(*v4);
-            }
-        }
-    }
-    None
+}
+
+fn same_lan_probe_ips(local_ip: Ipv4Addr) -> Vec<Ipv4Addr> {
+    let [a, b, c, own_host] = local_ip.octets();
+    (1..=254)
+        .filter(|host| *host != own_host)
+        .map(|host| Ipv4Addr::new(a, b, c, host))
+        .collect()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -231,7 +327,10 @@ pub async fn run_discovery(
                     emit_log(
                         &handle,
                         "error",
-                        &format!("Failed to bind TCP port {} after 5 retries: {}", TCP_PORT, e),
+                        &format!(
+                            "Failed to bind TCP port {} after 5 retries: {}",
+                            TCP_PORT, e
+                        ),
                     );
                     running.store(false, Ordering::SeqCst);
                     return;
@@ -254,6 +353,7 @@ pub async fn run_discovery(
     let peers_mdns = discovered_peers.clone();
     let my_id_mdns = my_id.clone();
     let pending_mdns = pending_removals.clone();
+    let local_ip_mdns = local_ip;
     let mdns_processor = tokio::spawn(async move {
         let grace_period = Duration::from_secs(15);
         let mut last_sweep = Instant::now();
@@ -346,13 +446,42 @@ pub async fn run_discovery(
                             continue;
                         }
 
-                        // Get the first IPv4 address
-                        let ip = info
+                        let ip = match choose_peer_ipv4(info.get_addresses().iter(), local_ip_mdns)
+                        {
+                            Some(ip) => ip.to_string(),
+                            None => {
+                                emit_log(
+                                    &handle_mdns,
+                                    "warn",
+                                    &format!(
+                                        "Ignoring peer {} with no usable LAN IPv4 address",
+                                        &peer_id[..8]
+                                    ),
+                                );
+                                continue;
+                            }
+                        };
+
+                        let advertised_ipv4s: Vec<String> = info
                             .get_addresses()
                             .iter()
-                            .find(|a| a.is_ipv4())
-                            .map(|a| a.to_string())
-                            .unwrap_or_default();
+                            .filter_map(|addr| match addr.to_ip_addr() {
+                                IpAddr::V4(v4) => Some(v4.to_string()),
+                                _ => None,
+                            })
+                            .collect();
+                        if advertised_ipv4s.len() > 1 {
+                            emit_log(
+                                &handle_mdns,
+                                "info",
+                                &format!(
+                                    "Peer {} advertised IPs {}; using {}",
+                                    &peer_id[..8],
+                                    advertised_ipv4s.join(", "),
+                                    ip
+                                ),
+                            );
+                        }
 
                         if ip.is_empty() {
                             continue;
@@ -489,7 +618,84 @@ pub async fn run_discovery(
         }
     });
 
-    let _ = tokio::join!(mdns_processor, tcp_acceptor);
+    // ── Task 3: same-LAN TCP healer scan ──
+    // mDNS can be lost or polluted by VPN/virtual interfaces. Probe only this
+    // machine's /24 LAN and recover peers by their authenticated UUID handshake.
+    let running_scan = running.clone();
+    let handle_scan = handle.clone();
+    let peers_scan = discovered_peers.clone();
+    let my_id_scan = my_id.clone();
+    let my_uuid_scan = identity.id_bytes();
+    let lan_scanner = tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(30));
+
+        loop {
+            interval.tick().await;
+            if !running_scan.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let Some(local_ip) = get_local_ipv4() else {
+                continue;
+            };
+
+            let mut probes = JoinSet::new();
+            for ip in same_lan_probe_ips(local_ip) {
+                let ip_string = ip.to_string();
+                let uuid = my_uuid_scan;
+                probes.spawn(async move {
+                    probe_peer_id(&ip_string, &uuid)
+                        .await
+                        .ok()
+                        .map(|peer_id| (peer_id, ip_string))
+                });
+            }
+
+            while let Some(result) = probes.join_next().await {
+                let Ok(Some((raw_peer_id, ip))) = result else {
+                    continue;
+                };
+                let Some(peer_id) = normalize_uuid(&raw_peer_id) else {
+                    continue;
+                };
+                if peer_id == my_id_scan {
+                    continue;
+                }
+
+                let mut peers = peers_scan.lock().await;
+                let changed = peers
+                    .get(&peer_id)
+                    .map(|peer| peer.ip != ip)
+                    .unwrap_or(true);
+                let peer = DiscoveredPeer {
+                    id: peer_id.clone(),
+                    alias: peers
+                        .get(&peer_id)
+                        .map(|p| p.alias.clone())
+                        .unwrap_or_else(|| format!("Device-{}", &peer_id[..8])),
+                    device_type: peers
+                        .get(&peer_id)
+                        .map(|p| p.device_type.clone())
+                        .unwrap_or_else(|| "desktop".to_string()),
+                    ip: ip.clone(),
+                    port: TCP_PORT,
+                };
+                peers.insert(peer_id.clone(), peer.clone());
+                drop(peers);
+
+                if changed {
+                    emit_log(
+                        &handle_scan,
+                        "info",
+                        &format!("LAN scan found {} at {}", &peer_id[..8], ip),
+                    );
+                    let _ = handle_scan.emit("lan_peer_discovered", &peer);
+                }
+            }
+        }
+    });
+
+    let _ = tokio::join!(mdns_processor, tcp_acceptor, lan_scanner);
 
     // Graceful shutdown — send mDNS goodbye
     let _ = mdns.shutdown();
@@ -505,10 +711,27 @@ async fn handle_incoming_session(
     context: &IncomingSessionContext<'_>,
 ) -> Result<(), String> {
     // Extract sender IP before moving stream into Connection
-    let sender_ip = stream
+    let sender_addr = stream
         .peer_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_default();
+        .map_err(|e| format!("Failed to read peer address: {}", e))?;
+    let sender_ip = sender_addr.ip().to_string();
+
+    match (get_local_ipv4(), sender_addr.ip()) {
+        (Some(local_ip), IpAddr::V4(sender_v4)) if is_same_lan_ipv4(local_ip, sender_v4) => {}
+        (Some(local_ip), IpAddr::V4(sender_v4)) => {
+            return Err(format!(
+                "Rejected non-LAN incoming connection from {} (local LAN is {})",
+                sender_v4, local_ip
+            ));
+        }
+        (Some(local_ip), other) => {
+            return Err(format!(
+                "Rejected non-IPv4 incoming connection from {} (local LAN is {})",
+                other, local_ip
+            ));
+        }
+        (None, _) => return Err("Rejected incoming connection: no local LAN IPv4".into()),
+    }
 
     let (conn, sender_id) = Connection::from_incoming(stream, my_uuid).await?;
 
