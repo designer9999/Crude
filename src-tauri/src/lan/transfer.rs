@@ -11,6 +11,7 @@ use tokio::time;
 use walkdir::WalkDir;
 
 use super::protocol::{Message, CHUNK_SIZE, TCP_PORT};
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use crate::commands::format_size;
 
 pub struct Connection {

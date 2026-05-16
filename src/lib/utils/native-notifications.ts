@@ -20,6 +20,9 @@ async function ensurePermission(): Promise<boolean> {
 }
 
 export async function sendNativeNotification(title: string, body: string): Promise<void> {
+  // Android receive notifications are emitted from Rust so they still work
+  // when the WebView is backgrounded or paused.
+  if (/Android/i.test(navigator.userAgent)) return;
   if (!await ensurePermission()) return;
   await sendNotification({
     id: INCOMING_NOTIFICATION_ID,

@@ -342,6 +342,11 @@ pub async fn show_in_explorer(path: String) -> Result<bool, String> {
         }
     }
 
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = target;
+    }
+
     Ok(true)
 }
 
@@ -852,6 +857,11 @@ pub async fn open_file(path: String, app: tauri::AppHandle) -> Result<(), String
         if !target.is_dir() {
             return Err("open_file: desktop open is restricted to folders".to_string());
         }
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = target;
     }
 
     app.opener()

@@ -5,6 +5,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(target_os = "android")]
+use tauri::Manager;
 use tauri::{AppHandle, Emitter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
@@ -25,6 +27,46 @@ fn emit_log(handle: &AppHandle, level: &str, text: &str) {
         }),
     );
     eprintln!("[LAN {}] {}", level, text);
+}
+
+#[cfg(target_os = "android")]
+fn emit_android_receive_notification(handle: &AppHandle, title: &str, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+
+    let focused = handle
+        .get_webview_window("main")
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false);
+    if focused {
+        return;
+    }
+
+    let _ = handle
+        .notification()
+        .builder()
+        .channel_id("landrop-incoming")
+        .title(title)
+        .body(body)
+        .group("landrop")
+        .auto_cancel()
+        .show();
+}
+
+#[cfg(not(target_os = "android"))]
+fn emit_android_receive_notification(_handle: &AppHandle, _title: &str, _body: &str) {}
+
+fn notification_text_preview(text: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return "New message received".to_string();
+    }
+
+    let mut preview: String = trimmed.chars().take(MAX_CHARS).collect();
+    if trimmed.chars().count() > MAX_CHARS {
+        preview.push_str("...");
+    }
+    preview
 }
 
 const BAD_INTERFACE_KEYWORDS: &[&str] = &[
@@ -759,7 +801,7 @@ async fn handle_incoming_session(
 
     // Register sender in discovered_peers (ensures we can send back to them).
     // Always update the IP — mDNS might have stale data or never discovered them.
-    {
+    let sender_alias = {
         let mut peers = context.discovered_peers.lock().await;
         let peer = DiscoveredPeer {
             id: sender_id.clone(),
@@ -774,12 +816,14 @@ async fn handle_incoming_session(
             ip: sender_ip.clone(),
             port: TCP_PORT,
         };
+        let alias = peer.alias.clone();
         peers.insert(sender_id.clone(), peer.clone());
         drop(peers);
         // Always emit the peer to the frontend on inbound traffic.
         // This rehydrates the UI if discovery is stale or the user removed the chip locally.
         let _ = context.handle.emit("lan_peer_discovered", &peer);
-    }
+        alias
+    };
 
     // Read messages until connection closes
     loop {
@@ -790,6 +834,11 @@ async fn handle_incoming_session(
 
         match msg {
             super::protocol::Message::Text { text } => {
+                emit_android_receive_notification(
+                    context.handle,
+                    &sender_alias,
+                    &notification_text_preview(&text),
+                );
                 let _ = context.handle.emit(
                     "lan_text_received",
                     serde_json::json!({"peer_id": sender_id, "text": text}),
@@ -807,6 +856,11 @@ async fn handle_incoming_session(
                 .await
                 {
                     Ok(path) => {
+                        emit_android_receive_notification(
+                            context.handle,
+                            &sender_alias,
+                            &format!("Received {}", name),
+                        );
                         let _ = context.handle.emit(
                             "lan_files_received",
                             serde_json::json!({
@@ -834,6 +888,12 @@ async fn handle_incoming_session(
                 .await
                 {
                     Ok(files) => {
+                        let body = match files.len() {
+                            0 => "Received files".to_string(),
+                            1 => format!("Received {}", files[0].0),
+                            n => format!("Received {} items", n),
+                        };
+                        emit_android_receive_notification(context.handle, &sender_alias, &body);
                         let names: Vec<&str> = files.iter().map(|(n, _, _)| n.as_str()).collect();
                         let details: Vec<serde_json::Value> = files.iter()
                             .map(|(name, path, size)| serde_json::json!({"name": name, "path": path, "size": size}))

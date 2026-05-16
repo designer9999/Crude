@@ -31,16 +31,22 @@ pub fn run() {
         }
     }
 
-    let mut builder = tauri::Builder::default()
-        // Single instance — must be first plugin. If app is already running,
-        // focus the existing window instead of opening a second instance.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let mut builder = tauri::Builder::default();
+
+    // Single instance — desktop only and must be first plugin. If app is already
+    // running, focus the existing window instead of opening a second instance.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.unminimize();
                 let _ = win.set_focus();
             }
-        }))
+        }));
+    }
+
+    builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
@@ -144,6 +150,19 @@ pub fn run() {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             let identity = lan::identity::DeviceIdentity::load_or_create(&data_dir);
             app.manage(lan::LanState::new(handle, identity, data_dir));
+
+            #[cfg(target_os = "android")]
+            {
+                use tauri_plugin_notification::{Channel, Importance, NotificationExt, Visibility};
+                let _ = app.notification().create_channel(
+                    Channel::builder("landrop-incoming", "LanDrop incoming")
+                        .description("Incoming LanDrop files and messages")
+                        .importance(Importance::High)
+                        .visibility(Visibility::Public)
+                        .vibration(true)
+                        .build(),
+                );
+            }
 
             // ── System Tray (desktop only) ──
             #[cfg(desktop)]
