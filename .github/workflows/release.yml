@@ -201,19 +201,27 @@ jobs:
         run: npm ci
 
       - name: Build Android APK
-        run: npx tauri android build --debug --target aarch64 --apk --ci
+        run: npx tauri android build --target aarch64 --apk --ci
         env:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: Prepare APK asset
         run: |
-          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*debug.apk" | head -1)
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*release-unsigned.apk" | head -1)
           test -n "$APK"
-          cp "$APK" landrop-android-universal-debug.apk
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks android/signing/landrop-release.jks \
+            --ks-pass pass:landrop-release \
+            --key-pass pass:landrop-release \
+            --ks-key-alias landrop-release \
+            --out landrop-android-arm64-release.apk \
+            "$APK"
+          "$BUILD_TOOLS/apksigner" verify --verbose landrop-android-arm64-release.apk
 
       - name: Upload APK to release
         uses: softprops/action-gh-release@v2
         with:
-          files: landrop-android-universal-debug.apk
+          files: landrop-android-arm64-release.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

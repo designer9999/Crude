@@ -33,7 +33,7 @@
   let debugEl: HTMLDivElement | undefined = $state();
   let updateStatus = $state<"idle" | "checking" | "available" | "downloading" | "uptodate" | "error">("idle");
   let updateError = $state("");
-  const androidApkUrl = "https://github.com/designer9999/LanDrop/releases/latest/download/landrop-android-universal-debug.apk";
+  const androidApkUrl = "https://github.com/designer9999/LanDrop/releases/latest/download/landrop-android-arm64-release.apk";
   const androidReleaseUrl = "https://github.com/designer9999/LanDrop/releases/latest";
 
   // Device identity
