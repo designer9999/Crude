@@ -255,6 +255,7 @@ pub fn run() {
             commands::save_clipboard_image,
             commands::get_clipboard_files,
             commands::read_file_preview,
+            commands::read_file_bytes,
             commands::set_mica,
             commands::get_explorer_selection,
             commands::open_file,

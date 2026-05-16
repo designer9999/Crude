@@ -182,14 +182,23 @@ export async function getFullImage(path: string, maxPx: number = 800): Promise<s
 /** Get a playable video source URL (reads file → blob URL) */
 export async function getVideoSrc(path: string): Promise<string | null> {
   try {
-    const { readFile } = await import("@tauri-apps/plugin-fs");
-    const data = await readFile(path);
+    const data = await readFileBytes(path);
     const ext = path.split(".").pop()?.toLowerCase() ?? "mp4";
     const mime = ext === "webm" ? "video/webm" : ext === "mov" ? "video/quicktime" : ext === "mkv" ? "video/x-matroska" : "video/mp4";
     const blob = new Blob([data], { type: mime });
     return URL.createObjectURL(blob);
   } catch {
     return null;
+  }
+}
+
+async function readFileBytes(path: string): Promise<Uint8Array> {
+  try {
+    const { readFile } = await import("@tauri-apps/plugin-fs");
+    return await readFile(path);
+  } catch {
+    const data = await invoke<number[] | Uint8Array>("read_file_bytes", { path });
+    return data instanceof Uint8Array ? data : new Uint8Array(data);
   }
 }
 

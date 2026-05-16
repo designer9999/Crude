@@ -544,6 +544,20 @@ pub async fn read_file_preview(
 }
 
 #[tauri::command]
+pub async fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
+    tokio::task::spawn_blocking(move || {
+        let p = Path::new(&path);
+        if !p.exists() || !p.is_file() {
+            return Err("File not found".to_string());
+        }
+
+        std::fs::read(p).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn get_clipboard_files() -> Result<Vec<String>, String> {
     #[cfg(target_os = "windows")]
     {
