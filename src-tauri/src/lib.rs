@@ -259,6 +259,7 @@ pub fn run() {
             commands::set_mica,
             commands::get_explorer_selection,
             commands::open_file,
+            commands::open_url,
             commands::save_temp_for_send,
             commands::cleanup_send_cache,
         ])

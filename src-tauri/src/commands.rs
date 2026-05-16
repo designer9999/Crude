@@ -883,6 +883,15 @@ pub async fn open_file(path: String, app: tauri::AppHandle) -> Result<(), String
         .map_err(|e| format!("open_file: {e}"))
 }
 
+#[tauri::command]
+pub async fn open_url(url: String, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("open_url: {e}"))
+}
+
 /// Save raw bytes (from frontend file read) to a temp file for sending.
 /// Used on Android where content:// URIs can't be read directly by Rust.
 #[tauri::command]

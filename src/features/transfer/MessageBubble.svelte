@@ -157,12 +157,18 @@
     {/if}
 
     {#if media.length > 0}
-      <div class="att-images" class:att-grid={media.length > 1}>
+      <div
+        class="att-images"
+        class:att-grid={media.length > 1}
+        class:att-single-video={media.length === 1 && media[0].type === "video"}
+      >
         {#each media as item}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="att-img-wrap"
+            class:att-video-wrap={item.type === "video"}
+            class:att-video-loading={item.type === "video" && !videoUrls[item.path]}
             onclick={(e) => { e.stopPropagation(); onlightbox(item.path, item.name); }}
             onmouseenter={() => item.type === "video" && handleVideoEnter(item.path)}
             onmouseleave={() => item.type === "video" && handleVideoLeave(item.path)}
@@ -191,7 +197,9 @@
                   <Icon name={videoMuted[item.path] !== false ? "volume_off" : "volume_up"} size={14} />
                 </button>
               {:else}
-                <div class="att-img-placeholder"><Icon name="videocam" size={24} /></div>
+                <div class="att-img-placeholder att-video-skeleton" aria-hidden="true">
+                  <Icon name="videocam" size={24} />
+                </div>
               {/if}
             {:else if thumbCache[item.path] && thumbCache[item.path] !== ""}
               <img src={thumbCache[item.path]} alt={item.name} class="att-img" />
@@ -382,16 +390,38 @@
   .bubble:hover .star-btn.starred { opacity: 1; }
 
   .att-images { margin-bottom: 4px; border-radius: 12px; overflow: hidden; }
+  .att-single-video { width: min(260px, calc(100vw - 48px)); max-width: 100%; }
   .att-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; }
-  .att-img-wrap { position: relative; background: var(--md-sys-color-surface-container); min-height: 60px; }
+  .att-img-wrap { position: relative; background: var(--md-sys-color-surface-container); min-height: 60px; overflow: hidden; }
+  .att-video-wrap {
+    width: 100%;
+    min-height: 0;
+    aspect-ratio: 3 / 4;
+  }
   .att-img { display: block; width: 100%; max-height: 200px; object-fit: cover; cursor: pointer; }
+  .att-video-wrap .att-img {
+    height: 100%;
+    max-height: none;
+  }
   .att-img-placeholder {
     display: flex; align-items: center; justify-content: center;
-    width: 100%; min-height: 80px;
+    width: 100%; height: 100%; min-height: 80px;
     color: var(--md-sys-color-on-surface-variant);
     animation: shimmer 1.5s cubic-bezier(0.2, 0.0, 0, 1.0) infinite alternate;
   }
-  .att-grid .att-img { aspect-ratio: 1; max-height: none; }
+  .att-video-skeleton {
+    background:
+      linear-gradient(90deg, transparent, color-mix(in srgb, var(--md-sys-color-on-surface) 7%, transparent), transparent),
+      var(--md-sys-color-surface-container-high);
+    background-size: 220% 100%, auto;
+    animation: video-skeleton 1.4s cubic-bezier(0.2, 0.0, 0, 1.0) infinite;
+  }
+  @keyframes video-skeleton {
+    from { background-position: 120% 0, 0 0; opacity: 0.72; }
+    to { background-position: -120% 0, 0 0; opacity: 1; }
+  }
+  .att-grid .att-img-wrap { aspect-ratio: 1; }
+  .att-grid .att-img { height: 100%; aspect-ratio: 1; max-height: none; }
   .att-img-download {
     position: absolute;
     bottom: 6px;

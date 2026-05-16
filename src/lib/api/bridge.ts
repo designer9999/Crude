@@ -122,6 +122,10 @@ export async function openFile(path: string): Promise<void> {
   return invoke("open_file", { path });
 }
 
+export async function openUrl(url: string): Promise<void> {
+  return invoke("open_url", { url });
+}
+
 export async function downloadFile(path: string): Promise<string> {
   // Files received from LAN are already at /storage/emulated/0/Download/LanDrop/
   // Copy to standard Downloads so it shows in gallery and file manager
@@ -180,14 +184,29 @@ export async function getFullImage(path: string, maxPx: number = 800): Promise<s
 }
 
 /** Get a playable video source URL (reads file → blob URL) */
+const videoSrcCache = new Map<string, Promise<string | null>>();
+const cachedVideoBlobUrls = new Set<string>();
+
 export async function getVideoSrc(path: string): Promise<string | null> {
+  const cached = videoSrcCache.get(path);
+  if (cached) return cached;
+
+  const source = loadVideoSrc(path);
+  videoSrcCache.set(path, source);
+  return source;
+}
+
+async function loadVideoSrc(path: string): Promise<string | null> {
   try {
     const data = await readFileBytes(path);
     const ext = path.split(".").pop()?.toLowerCase() ?? "mp4";
     const mime = ext === "webm" ? "video/webm" : ext === "mov" ? "video/quicktime" : ext === "mkv" ? "video/x-matroska" : "video/mp4";
     const blob = new Blob([data], { type: mime });
-    return URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    cachedVideoBlobUrls.add(url);
+    return url;
   } catch {
+    videoSrcCache.delete(path);
     return null;
   }
 }
@@ -217,6 +236,7 @@ async function mobileImageSrc(path: string): Promise<string | null> {
 
 /** Revoke a blob URL to free memory. Safe to call on non-blob URLs (no-op). */
 export function revokeBlobUrl(url: string): void {
+  if (cachedVideoBlobUrls.has(url)) return;
   if (url && url.startsWith("blob:")) {
     try { URL.revokeObjectURL(url); } catch { /* ignore */ }
   }

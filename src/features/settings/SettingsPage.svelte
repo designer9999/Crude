@@ -9,7 +9,7 @@
   import Slider from "$lib/ui/Slider.svelte";
   import TextField from "$lib/ui/TextField.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { pickSaveFolder, copyToClipboard, setMica, getDeviceIdentity, setDeviceAlias, isMobile, getPlatformInfo, type PlatformInfo } from "$lib/api/bridge";
+  import { pickSaveFolder, copyToClipboard, setMica, getDeviceIdentity, setDeviceAlias, isMobile, getPlatformInfo, openUrl, type PlatformInfo } from "$lib/api/bridge";
   import { playReceiveSound } from "$lib/utils/notification-sound";
   import { getThemeState } from "$lib/theme/theme-store.svelte";
   import { VARIANT_INFO, PRESET_COLORS, type SchemeVariant } from "$lib/theme/m3-color";
@@ -33,6 +33,8 @@
   let debugEl: HTMLDivElement | undefined = $state();
   let updateStatus = $state<"idle" | "checking" | "available" | "downloading" | "uptodate" | "error">("idle");
   let updateError = $state("");
+  const androidApkUrl = "https://github.com/designer9999/LanDrop/releases/latest/download/landrop-android-universal-debug.apk";
+  const androidReleaseUrl = "https://github.com/designer9999/LanDrop/releases/latest";
 
   // Device identity
   let deviceAlias = $state("");
@@ -67,7 +69,13 @@
 
   async function checkForUpdates() {
     if (isMobile()) {
-      onsnackbar?.("Updates are not available on mobile");
+      try {
+        await openUrl(androidApkUrl);
+        onsnackbar?.("APK download opened — install it from Downloads");
+      } catch {
+        await openUrl(androidReleaseUrl);
+        onsnackbar?.("GitHub release opened — download the Android APK");
+      }
       return;
     }
     updateStatus = "checking";
@@ -519,10 +527,17 @@
           </div>
         </div>
 
-        <Button variant="elevated" full onclick={checkForUpdates} disabled={updateStatus === "checking" || updateStatus === "downloading"}>
-          <Icon name={updateStatus === "uptodate" ? "check_circle" : updateStatus === "error" ? "error" : "system_update"} size={18} />
-          {updateStatus === "checking" ? "Checking..." : updateStatus === "downloading" ? "Downloading..." : updateStatus === "uptodate" ? "Up to date!" : updateStatus === "error" ? "Check failed" : "Check for updates"}
+        <Button variant="elevated" full onclick={checkForUpdates} disabled={!isMobile() && (updateStatus === "checking" || updateStatus === "downloading")}>
+          <Icon name={isMobile() ? "download" : updateStatus === "uptodate" ? "check_circle" : updateStatus === "error" ? "error" : "system_update"} size={18} />
+          {isMobile() ? "Download latest Android APK" : updateStatus === "checking" ? "Checking..." : updateStatus === "downloading" ? "Downloading..." : updateStatus === "uptodate" ? "Up to date!" : updateStatus === "error" ? "Check failed" : "Check for updates"}
         </Button>
+
+        {#if isMobile()}
+          <div class="android-update-help">
+            <Icon name="install_mobile" size={16} />
+            <span>After download, open the APK from Downloads or the browser notification, then tap Update or Install.</span>
+          </div>
+        {/if}
 
         <div class="text-sm text-on-surface-variant leading-relaxed">
           <p class="font-medium text-on-surface mb-1">How it works</p>
@@ -614,6 +629,23 @@
   @keyframes section-slide {
     from { opacity: 0; transform: translateY(-8px); }
     to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .android-update-help {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--md-sys-color-primary) 10%, transparent);
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 12px;
+    line-height: 16px;
+  }
+  .android-update-help :global(.material-symbols-rounded) {
+    color: var(--md-sys-color-primary);
+    flex-shrink: 0;
+    margin-top: 1px;
   }
 
   /* ── Theme panel ── */
