@@ -906,11 +906,60 @@ pub async fn save_temp_for_send(
     tokio::fs::create_dir_all(&send_dir)
         .await
         .map_err(|e| e.to_string())?;
-    let out_path = send_dir.join(&name);
+    let out_path = send_dir.join(safe_file_name(&name));
     tokio::fs::write(&out_path, &data)
         .await
         .map_err(|e| e.to_string())?;
     Ok(out_path.to_string_lossy().to_string())
+}
+
+/// Save a durable local copy for message history previews.
+/// Android picker URIs and cache files cannot be trusted after process restart.
+#[tauri::command]
+pub async fn save_history_file(
+    name: String,
+    data: Vec<u8>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let history_dir = data_dir.join("media_history");
+    tokio::fs::create_dir_all(&history_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let out_path = history_dir.join(format!("{}_{}", ts, safe_file_name(&name)));
+    tokio::fs::write(&out_path, &data)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(out_path.to_string_lossy().to_string())
+}
+
+/// Delete only files created in LanDrop's own media_history folder.
+#[tauri::command]
+pub async fn delete_history_files(paths: Vec<String>, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let history_dir = data_dir.join("media_history");
+    let history_root = tokio::fs::canonicalize(&history_dir)
+        .await
+        .unwrap_or(history_dir);
+
+    for path in paths {
+        let candidate = PathBuf::from(path);
+        let Ok(target) = tokio::fs::canonicalize(candidate).await else {
+            continue;
+        };
+        if target.starts_with(&history_root) && target.is_file() {
+            let _ = tokio::fs::remove_file(target).await;
+        }
+    }
+
+    Ok(())
 }
 
 /// Clean up temp files from send cache
@@ -923,6 +972,26 @@ pub async fn cleanup_send_cache(app: tauri::AppHandle) -> Result<(), String> {
         let _ = tokio::fs::remove_dir_all(&send_dir).await;
     }
     Ok(())
+}
+
+fn safe_file_name(name: &str) -> String {
+    let file_name = Path::new(name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file");
+    let cleaned: String = file_name
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => '_',
+            _ => ch,
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches(&['.', ' ', '_'][..]);
+    if trimmed.is_empty() {
+        "file".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 pub(crate) fn format_size(bytes: u64) -> String {

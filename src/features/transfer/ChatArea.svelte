@@ -6,7 +6,8 @@
   import Icon from "$lib/ui/Icon.svelte";
   import TextField from "$lib/ui/TextField.svelte";
   import { getAppState } from "$lib/state/app-state.svelte";
-  import { pickFiles, pickFolder, getFileInfo, copyToClipboard, getThumbnail, getFullImage, readFilePreview, onDragDrop, isMobile, getContentFileName, revokeBlobUrl, openFile } from "$lib/api/bridge";
+  import { pickFiles, pickFolder, getFileInfo, copyToClipboard, getThumbnail, getFullImage, readFilePreview, onDragDrop, isMobile, getContentFileName, revokeBlobUrl, openFile, deleteHistoryFiles } from "$lib/api/bridge";
+  import type { MessageEntry } from "$lib/state/app-state.svelte";
   import type { FilePreview } from "$lib/api/bridge";
   import { isImage } from "$lib/utils/file-utils";
   import { onMount } from "svelte";
@@ -234,6 +235,41 @@
     }
   }
 
+  function collectAttachmentPaths(messages: MessageEntry[]): string[] {
+    const paths = new Set<string>();
+    for (const message of messages) {
+      for (const attachment of message.attachments ?? []) {
+        if (attachment.path) paths.add(attachment.path);
+        for (const child of attachment.children ?? []) {
+          if (child.path) paths.add(child.path);
+        }
+      }
+    }
+    return [...paths];
+  }
+
+  function clearActiveChatKeepSaved() {
+    const peerId = app.activeDevice?.id;
+    if (!peerId) return;
+    const deletedMessages = app.getPeerMessages(peerId).filter((message) => !message.starred);
+    deleteHistoryFiles(collectAttachmentPaths(deletedMessages));
+    app.clearMessages(peerId);
+  }
+
+  function deleteActiveChat() {
+    const peerId = app.activeDevice?.id;
+    if (!peerId) return;
+    deleteHistoryFiles(collectAttachmentPaths(app.getPeerMessages(peerId)));
+    app.deleteAllMessages(peerId);
+  }
+
+  function deleteMessagesOlderThan(daysOld: number) {
+    const cutoff = new Date(Date.now() - daysOld * 86400000).toISOString();
+    const deletedMessages = app.messages.filter((message) => !message.starred && message.timestamp < cutoff);
+    deleteHistoryFiles(collectAttachmentPaths(deletedMessages));
+    app.deleteOldMessages(daysOld);
+  }
+
   async function openLightbox(path: string, name: string) {
     lightboxPath = path;
     lightboxName = name;
@@ -344,16 +380,16 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div class="clear-menu" onclick={() => showClearMenu = false}>
-            <button onclick={() => { app.activeDevice && app.clearMessages(app.activeDevice.id); }}>
+            <button onclick={clearActiveChatKeepSaved}>
               Clear chat (keep saved)
             </button>
-            <button onclick={() => { app.activeDevice && app.deleteAllMessages(app.activeDevice.id); }}>
+            <button onclick={deleteActiveChat}>
               Delete all for this peer
             </button>
-            <button onclick={() => { app.deleteOldMessages(7); }}>
+            <button onclick={() => deleteMessagesOlderThan(7)}>
               Delete older than 7 days
             </button>
-            <button onclick={() => { app.deleteOldMessages(30); }}>
+            <button onclick={() => deleteMessagesOlderThan(30)}>
               Delete older than 30 days
             </button>
           </div>

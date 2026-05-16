@@ -18,6 +18,12 @@ export interface FileInfo {
   count?: number;
 }
 
+export interface PreparedSendPath {
+  originalPath: string;
+  sendPath: string;
+  historyPath: string;
+}
+
 export interface DeviceIdentity {
   id: string;
   alias: string;
@@ -67,10 +73,19 @@ export async function lanSendText(peerId: string, text: string, peerIp?: string)
   return invoke<boolean>("lan_send_text", { peerId, text, peerIp });
 }
 
-export async function lanSendFiles(peerId: string, paths: string[], peerIp?: string): Promise<boolean> {
+export async function lanSendFiles(
+  peerId: string,
+  paths: string[],
+  peerIp?: string,
+  onPrepared?: (files: PreparedSendPath[]) => void,
+): Promise<boolean> {
   // On Android, resolve content:// URIs to real files before sending
-  const resolved = isMobile() ? await resolveContentUris(paths) : paths;
-  const result = await invoke<boolean>("lan_send_files", { peerId, paths: resolved, peerIp });
+  const prepared = isMobile()
+    ? await prepareSendPaths(paths)
+    : paths.map((path) => ({ originalPath: path, sendPath: path, historyPath: path }));
+  onPrepared?.(prepared);
+
+  const result = await invoke<boolean>("lan_send_files", { peerId, paths: prepared.map((file) => file.sendPath), peerIp });
   // Clean up temp files after send
   if (isMobile()) invoke("cleanup_send_cache").catch(() => {});
   return result;
@@ -155,6 +170,15 @@ export async function downloadFile(path: string): Promise<string> {
     await invoke("plugin:file-helper|saveToDownloads", { path: targetPath });
   } catch { /* scan is best-effort */ }
   return targetPath;
+}
+
+export async function deleteHistoryFiles(paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  try {
+    await invoke("delete_history_files", { paths });
+  } catch {
+    // Best-effort cleanup. Real Downloads/Pictures files are never targeted.
+  }
 }
 
 export async function getContentFileName(uri: string): Promise<{ name: string; mimeType: string } | null> {
@@ -372,8 +396,8 @@ export async function windowShow() {
 // On Android, file picker returns content:// URIs that Rust can't read directly.
 // We use the file-helper plugin to get real filenames, FS plugin to read data,
 // and a Rust command to save to a temp file.
-async function resolveContentUris(paths: string[]): Promise<string[]> {
-  const resolved: string[] = [];
+async function prepareSendPaths(paths: string[]): Promise<PreparedSendPath[]> {
+  const resolved: PreparedSendPath[] = [];
   for (const p of paths) {
     if (p.startsWith("content://")) {
       try {
@@ -391,15 +415,17 @@ async function resolveContentUris(paths: string[]): Promise<string[]> {
         }
         // Read file data via FS plugin (handles content:// on Android)
         const data = await readFile(p);
-        // Save to temp via Rust
-        const realPath = await invoke<string>("save_temp_for_send", { name, data: Array.from(data) });
-        resolved.push(realPath);
+        const bytes = Array.from(data);
+        // Save one copy for transfer and one durable copy for chat history.
+        const realPath = await invoke<string>("save_temp_for_send", { name, data: bytes });
+        const historyPath = await invoke<string>("save_history_file", { name, data: bytes });
+        resolved.push({ originalPath: p, sendPath: realPath, historyPath });
       } catch (e) {
         console.error("Failed to resolve content URI:", p, e);
-        resolved.push(p);
+        resolved.push({ originalPath: p, sendPath: p, historyPath: p });
       }
     } else {
-      resolved.push(p);
+      resolved.push({ originalPath: p, sendPath: p, historyPath: p });
     }
   }
   return resolved;

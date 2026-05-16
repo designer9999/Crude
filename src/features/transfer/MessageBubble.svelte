@@ -31,6 +31,7 @@
   let videoProgress = $state<Record<string, number>>({});
   let videoDuration = $state<Record<string, number>>({});
   let videoMuted = $state<Record<string, boolean>>({});
+  let videoFailed = $state<Record<string, boolean>>({});
   let isSent = $derived(msg.direction === "sent");
   let attachments = $derived(Array.isArray(msg.attachments) ? msg.attachments : []);
   let hasAttachments = $derived(attachments.length > 0);
@@ -50,9 +51,12 @@
   // Resolve video asset URLs on mount
   $effect(() => {
     for (const att of attachments) {
-      if (att.type === "video" && att.path && !(att.path in videoUrls)) {
+      if (att.type === "video" && att.path && !(att.path in videoUrls) && !videoFailed[att.path]) {
         getVideoSrc(att.path).then(url => {
           if (url) videoUrls = { ...videoUrls, [att.path]: url };
+          else videoFailed = { ...videoFailed, [att.path]: true };
+        }).catch(() => {
+          videoFailed = { ...videoFailed, [att.path]: true };
         });
       }
     }
@@ -168,7 +172,7 @@
           <div
             class="att-img-wrap"
             class:att-video-wrap={item.type === "video"}
-            class:att-video-loading={item.type === "video" && !videoUrls[item.path]}
+            class:att-video-loading={item.type === "video" && !videoUrls[item.path] && !videoFailed[item.path]}
             onclick={(e) => { e.stopPropagation(); onlightbox(item.path, item.name); }}
             onmouseenter={() => item.type === "video" && handleVideoEnter(item.path)}
             onmouseleave={() => item.type === "video" && handleVideoLeave(item.path)}
@@ -197,8 +201,8 @@
                   <Icon name={videoMuted[item.path] !== false ? "volume_off" : "volume_up"} size={14} />
                 </button>
               {:else}
-                <div class="att-img-placeholder att-video-skeleton" aria-hidden="true">
-                  <Icon name="videocam" size={24} />
+                <div class="att-img-placeholder" class:att-video-skeleton={!videoFailed[item.path]} class:att-media-unavailable={videoFailed[item.path]} aria-hidden="true">
+                  <Icon name={videoFailed[item.path] ? "videocam_off" : "videocam"} size={24} />
                 </div>
               {/if}
             {:else if thumbCache[item.path] && thumbCache[item.path] !== ""}
@@ -415,6 +419,11 @@
       var(--md-sys-color-surface-container-high);
     background-size: 220% 100%, auto;
     animation: video-skeleton 1.4s cubic-bezier(0.2, 0.0, 0, 1.0) infinite;
+  }
+  .att-media-unavailable {
+    background: var(--md-sys-color-surface-container-high);
+    animation: none;
+    opacity: 0.72;
   }
   @keyframes video-skeleton {
     from { background-position: 120% 0, 0 0; opacity: 0.72; }

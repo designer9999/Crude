@@ -261,6 +261,8 @@ pub fn run() {
             commands::open_file,
             commands::open_url,
             commands::save_temp_for_send,
+            commands::save_history_file,
+            commands::delete_history_files,
             commands::cleanup_send_cache,
         ])
         .run(tauri::generate_context!())

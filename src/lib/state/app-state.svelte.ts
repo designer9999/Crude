@@ -225,6 +225,41 @@ function sanitizeMessages(raw: unknown): MessageEntry[] {
     .filter((message): message is MessageEntry => message !== null);
 }
 
+function placeholderDevice(peerId: string, color: number): DiscoveredDevice {
+  return {
+    id: peerId,
+    alias: `Device-${peerId.slice(0, 8)}`,
+    deviceType: "desktop",
+    ip: "",
+    online: false,
+    color,
+  };
+}
+
+function normalizeHydratedDevices(
+  rawDevices: unknown,
+  messages: MessageEntry[],
+): DiscoveredDevice[] {
+  const devices = Array.isArray(rawDevices) ? rawDevices.filter(isRecord).map((device, index) => ({
+    id: stringValue(device.id),
+    alias: stringValue(device.alias, stringValue(device.id).slice(0, 8) || "Device"),
+    deviceType: stringValue(device.deviceType, stringValue(device.device_type, "desktop")),
+    ip: stringValue(device.ip),
+    online: device.online === true,
+    color: numberValue(device.color) ?? index % PEER_COLORS.length,
+    outFolder: stringValue(device.outFolder) || undefined,
+  })).filter((device) => device.id) : [];
+
+  const seen = new Set(devices.map((device) => device.id));
+  for (const message of messages) {
+    if (seen.has(message.peerId)) continue;
+    seen.add(message.peerId);
+    devices.push(placeholderDevice(message.peerId, devices.length % PEER_COLORS.length));
+  }
+
+  return devices;
+}
+
 export interface ReceiveOptions {
   outFolder?: string;
   overwrite?: boolean;
@@ -503,10 +538,16 @@ class AppState {
   }
 
   hydratePersistedState(snapshot: PersistedAppState) {
-    this.devices = Array.isArray(snapshot.devices) ? snapshot.devices : [];
-    this.activeDeviceId = snapshot.activeDeviceId ?? null;
+    const messages = sanitizeMessages(snapshot.messages);
+    const devices = normalizeHydratedDevices(snapshot.devices, messages);
+    const activeDeviceId = snapshot.activeDeviceId ?? null;
+
+    this.devices = devices;
+    this.activeDeviceId = activeDeviceId && devices.some((device) => device.id === activeDeviceId)
+      ? activeDeviceId
+      : messages[messages.length - 1]?.peerId ?? devices[0]?.id ?? null;
     this.activity = Array.isArray(snapshot.activity) ? snapshot.activity : [];
-    this.messages = sanitizeMessages(snapshot.messages);
+    this.messages = messages;
     this.notificationsEnabled = snapshot.notificationsEnabled ?? true;
     this.popOnReceive = snapshot.popOnReceive ?? false;
     this.receiveOptions = snapshot.receiveOptions ?? {};

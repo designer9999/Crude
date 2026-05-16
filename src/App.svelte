@@ -9,7 +9,7 @@
   import { getAppState } from "$lib/state/app-state.svelte";
   import type { MessageAttachment } from "$lib/state/app-state.svelte";
   import { getStatus, startLanService, lanSendText, lanSendFiles, onLanLog, onLanPeerDiscovered, onLanPeerLost, onLanTextReceived, onLanFilesReceived, onTransferProgress, windowMinimize, windowToggleMaximize, windowClose, windowStartDrag, windowShow, setMica, setDefaultOutFolder, setPeerOutFolder, setReceiveSortByDate, getReceiveFolderSettings, registerShortcut, unregisterShortcut, getFileInfo, getExplorerSelection, getClipboardFiles } from "$lib/api/bridge";
-  import type { TransferProgress } from "$lib/api/bridge";
+  import type { PreparedSendPath, TransferProgress } from "$lib/api/bridge";
   import { loadPersistedAppState, savePersistedAppState } from "$lib/persistence/app-store";
   import { isImage as fileIsImage, isVideo as fileIsVideo, fileSizeStr } from "$lib/utils/file-utils";
   import { sendNativeNotification } from "$lib/utils/native-notifications";
@@ -405,13 +405,21 @@
     const pathsCopy = [...app.filePaths];
     app.transferActive = true;
     try {
-      const sent = await lanSendFiles(device.id, pathsCopy, device.ip);
+      let preparedFiles: PreparedSendPath[] = pathsCopy.map((path) => ({
+        originalPath: path,
+        sendPath: path,
+        historyPath: path,
+      }));
+      const sent = await lanSendFiles(device.id, pathsCopy, device.ip, (prepared) => {
+        preparedFiles = prepared;
+      });
       if (sent) {
         const names = filesCopy.map(f => f.info?.name ?? f.path.split(/[\\/]/).pop() ?? "file");
+        const historyPathFor = new Map(preparedFiles.map((file) => [file.originalPath, file.historyPath]));
         app.addActivity({ peerId: device.id, direction: "sent", type: "files", items: limitHistoryItems(names), success: true });
         const attachments: MessageAttachment[] = limitHistoryItems(filesCopy).map(f => ({
           name: f.info?.name ?? f.path.split(/[\\/]/).pop() ?? "file",
-          path: f.path, size: f.info?.size ?? "",
+          path: historyPathFor.get(f.path) ?? f.path, size: f.info?.size ?? "",
           type: fileIsImage(f.info?.name ?? f.path) ? "image" as const : fileIsVideo(f.info?.name ?? f.path) ? "video" as const : "file" as const,
         }));
         app.addMessage({ peerId: device.id, direction: "sent", text: "", attachments });
